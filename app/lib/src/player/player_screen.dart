@@ -5,14 +5,16 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import '../pipeline/subtitle_job.dart';
+import '../settings/app_settings.dart';
+import '../settings/settings_dialog.dart';
 import '../source/youtube_url.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
-import '../subtitle/webvtt.dart';
 
 /// 플레이어 화면: 로컬 파일 / YouTube 재생 + 이중 자막 오버레이.
-/// 자막 생성(STT)/번역 파이프라인은 M2/M3에서 Rust 코어와 연결한다.
+/// 영상을 열면 [SubtitleJob]이 자막 확보(캐시·내장·YouTube·STT)와 번역을 진행한다.
 class PlayerScreen extends StatefulWidget {
   const PlayerScreen({super.key, YtDlp? ytDlp}) : _ytDlp = ytDlp;
 
@@ -28,39 +30,61 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late final YtDlp _ytDlp = widget._ytDlp ?? YtDlp();
   StreamSubscription<Duration>? _posSub;
 
-  List<BilingualCue> _cues = const [];
+  AppSettings _settings = AppSettings();
+  SubtitleJob? _job;
   BilingualCue? _current;
+  Duration _pos = Duration.zero;
   String _title = 'DualCue';
   bool _loading = false;
   bool _showOriginal = true;
   bool _showTranslation = true;
 
+  List<BilingualCue> get _cues => _job?.cues ?? const [];
+
   @override
   void initState() {
     super.initState();
+    AppSettings.load().then((s) => setState(() => _settings = s));
     _posSub = _player.stream.position.listen((pos) {
-      final next = cueAt(_cues, pos);
-      if (!identical(next, _current)) setState(() => _current = next);
+      _pos = pos;
+      _updateCurrent();
     });
+  }
+
+  void _updateCurrent() {
+    final next = cueAt(_cues, _pos);
+    // 번역이 채워지면 같은 시간대라도 다른 객체가 되므로 identical로 비교
+    if (!identical(next, _current)) setState(() => _current = next);
   }
 
   @override
   void dispose() {
     _posSub?.cancel();
+    _job?.dispose();
     _player.dispose();
     super.dispose();
   }
-
-  void _setCues(List<BilingualCue> cues) => setState(() {
-    _cues = cues;
-    _current = null;
-  });
 
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  void _startJob(JobSource source) {
+    _job?.dispose();
+    final job = SubtitleJob(source: source, settings: _settings);
+    job.addListener(() {
+      if (!mounted || _job != job) return;
+      _updateCurrent();
+      setState(() {}); // 상태 표시줄 갱신
+    });
+    setState(() {
+      _job = job;
+      _current = null;
+    });
+    unawaited(job.run());
   }
 
   Future<void> _openFile() async {
@@ -70,9 +94,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
     final file = await openFile(acceptedTypeGroups: [videos]);
     if (file == null) return;
-    _setCues(const []);
     setState(() => _title = file.name);
     await _player.open(Media(file.path));
+    _startJob(LocalFileSource(file.path));
   }
 
   Future<void> _openYoutube() async {
@@ -90,52 +114,39 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() => _loading = true);
     try {
       final media = await _ytDlp.resolve(youtubeWatchUrl(id));
-      _setCues(const []);
       setState(() => _title = media.title);
       await _player.open(Media(media.videoUrl, httpHeaders: media.httpHeaders));
       if (media.audioUrl != null) {
         await _player.setAudioTrack(AudioTrack.uri(media.audioUrl!));
       }
-      await _loadYoutubeCaptions(media);
+      _startJob(YoutubeSource(media, _ytDlp));
     } catch (e) {
+      debugPrint('YouTube open failed: $e');
       _toast('YouTube 열기 실패: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  /// YouTube가 제공하는 자막을 쓰면 STT/번역 비용 없이 바로 학습할 수 있다.
-  Future<void> _loadYoutubeCaptions(YoutubeMedia media) async {
-    final orig = media.original;
-    if (orig == null) {
-      _toast('이 영상에는 자막이 없습니다 (STT 자막 생성은 M2에서 지원)');
-      return;
+  Future<void> _openSettings() async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => SettingsDialog(settings: _settings),
+    );
+    if (saved != true) return;
+    await _settings.save();
+    _toast('설정을 저장했습니다');
+    // 키를 새로 넣었으면 지금 영상의 번역을 이어서 진행
+    final job = _job;
+    if (job != null &&
+        (job.stage == JobStage.done || job.stage == JobStage.transcribing)) {
+      unawaited(job.translateRemaining());
     }
-    final cues = parseWebVtt(await _ytDlp.fetchCaption(media, orig));
-    _setCues(cues); // 원문부터 먼저 보여준다
-
-    var ko = media.korean;
-    if (ko != null) {
-      try {
-        final koCues = parseWebVtt(await _ytDlp.fetchCaption(media, ko));
-        _setCues(mergeTranslation(cues, koCues));
-      } on YtDlpException catch (e) {
-        debugPrint('Korean captions failed: $e');
-        ko = null; // 번역 실패해도 원문 자막으로 계속 학습 가능
-      }
-    }
-
-    final src = orig.auto ? '자동 생성' : '제공';
-    final trans = ko == null
-        ? (media.korean == null
-              ? '번역 없음 (AI 번역은 M3에서 지원)'
-              : '한국어 자막을 받지 못함 (YouTube 요청 제한)')
-        : (ko.auto ? 'YouTube 자동 번역' : '한국어 자막');
-    _toast('자막: ${orig.lang} $src · $trans');
   }
 
   @override
   Widget build(BuildContext context) {
+    final job = _job;
     return Scaffold(
       appBar: AppBar(
         title: Text(_title, overflow: TextOverflow.ellipsis),
@@ -163,7 +174,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
             icon: const Icon(Icons.folder_open),
             onPressed: _loading ? null : _openFile,
           ),
+          IconButton(
+            tooltip: '설정 (Claude API 키)',
+            icon: Icon(
+              Icons.settings,
+              color: _settings.hasClaudeKey ? null : Colors.amber,
+            ),
+            onPressed: _openSettings,
+          ),
         ],
+        bottom: job == null ? null : _JobStatusBar(job: job),
       ),
       body: Stack(
         children: [
@@ -180,6 +200,63 @@ class _PlayerScreenState extends State<PlayerScreen> {
             showTranslation: _showTranslation,
           ),
           if (_loading) const Center(child: CircularProgressIndicator()),
+        ],
+      ),
+    );
+  }
+}
+
+/// 자막 생성/번역 진행 상태 (앱바 아래)
+class _JobStatusBar extends StatelessWidget implements PreferredSizeWidget {
+  const _JobStatusBar({required this.job});
+
+  final SubtitleJob job;
+
+  @override
+  Size get preferredSize => const Size.fromHeight(30);
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = job.stage != JobStage.done && job.stage != JobStage.failed;
+    final color = job.stage == JobStage.failed
+        ? Theme.of(context).colorScheme.error
+        : null;
+    final notice = job.notice;
+    return SizedBox(
+      height: 30,
+      child: Column(
+        children: [
+          if (busy)
+            LinearProgressIndicator(value: job.progress, minHeight: 2)
+          else
+            const SizedBox(height: 2),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      job.status,
+                      style: TextStyle(fontSize: 12, color: color),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (notice != null)
+                    Flexible(
+                      child: Text(
+                        notice,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );

@@ -16,6 +16,23 @@ class BilingualCue {
   final String? translation;
 
   bool contains(Duration t) => t >= start && t < end;
+
+  BilingualCue withTranslation(String? t) =>
+      BilingualCue(start: start, end: end, original: original, translation: t);
+
+  Map<String, Object?> toJson() => {
+    's': start.inMilliseconds,
+    'e': end.inMilliseconds,
+    'o': original,
+    if (translation != null) 't': translation,
+  };
+
+  factory BilingualCue.fromJson(Map<String, dynamic> j) => BilingualCue(
+    start: Duration(milliseconds: j['s'] as int),
+    end: Duration(milliseconds: j['e'] as int),
+    original: j['o'] as String,
+    translation: j['t'] as String?,
+  );
 }
 
 /// 재생 위치에 해당하는 큐를 찾는다. (큐는 start 기준 정렬되어 있다고 가정)
