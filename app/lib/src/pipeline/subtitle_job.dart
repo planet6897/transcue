@@ -12,6 +12,7 @@ import '../subtitle/bilingual_cue.dart';
 import '../subtitle/webvtt.dart';
 import '../translate/claude_translator.dart';
 import 'media_tools.dart';
+import 'subsync.dart';
 import 'whisper.dart';
 
 /// 자막을 어디서 가져올지
@@ -124,6 +125,7 @@ class SubtitleJob extends ChangeNotifier {
         'lang': sourceLang,
         'from': originalFrom,
         'osTried': _osTried,
+        'sync': ?syncInfo,
         'cues': [for (final c in cues) c.toJson()],
       }),
     );
@@ -138,6 +140,7 @@ class SubtitleJob extends ChangeNotifier {
       sourceLang = j['lang'] as String?;
       originalFrom = '${j['from'] ?? '저장된 자막'}';
       _osTried = j['osTried'] == true;
+      syncInfo = j['sync'] as String?;
       _fromCache = true;
       _setCues([
         for (final c in (j['cues'] as List).cast<Map<String, dynamic>>())
@@ -166,6 +169,14 @@ class SubtitleJob extends ChangeNotifier {
       }
       _sttDone = true;
       await _saveCache();
+      if (_needsSync) {
+        // 한국어 자막을 다시 붙여야 하면 번역 전에, 아니면 번역과 동시에 싱크를 맞춘다
+        if (_onlineKorean != null) {
+          await _autoSync();
+        } else {
+          unawaited(_autoSync());
+        }
+      }
       await translateRemaining();
       if (stage != JobStage.failed) {
         _set(JobStage.done, _summary());
@@ -184,7 +195,8 @@ class SubtitleJob extends ChangeNotifier {
         : t == n
         ? ' · 번역 완료'
         : ' · 번역 $t/$n';
-    return '자막 $n줄 ($originalFrom${_fromCache ? ' · 저장됨' : ''})$trans';
+    final sync = syncInfo == null ? '' : ' · $syncInfo';
+    return '자막 $n줄 ($originalFrom${_fromCache ? ' · 저장됨' : ''})$trans$sync';
   }
 
   /// 내장 자막 또는 YouTube 자막. 찾으면 true.
@@ -250,8 +262,82 @@ class SubtitleJob extends ChangeNotifier {
     }
   }
 
-  /// 인터넷에서 찾은 한국어 자막 (원어 자막은 못 찾았을 때 STT 결과에 병합)
+  /// 인터넷에서 찾은 한국어 자막 (원본 시간 그대로, 싱크 보정 전)
   List<BilingualCue>? _onlineKorean;
+
+  /// 원어 자막을 인터넷에서 가져왔는지
+  bool _onlineOriginal = false;
+
+  // ---- 싱크 ----
+
+  /// 사용자가 [ ] 키로 옮긴 누적 시간
+  Duration manualOffset = Duration.zero;
+
+  bool get _needsSync =>
+      source is LocalFileSource && (_onlineOriginal || _onlineKorean != null);
+
+  /// 인터넷 자막의 시간을 음성 구간에 맞춘다. 실패해도 자막은 그대로 쓴다.
+  Future<void> _autoSync() async {
+    final path = (source as LocalFileSource).path;
+    final tmp = await Directory.systemTemp.createTemp('dualcue_sync_');
+    try {
+      if (stage != JobStage.translating) {
+        _set(JobStage.preparing, '자막 싱크 확인 중 (음성 구간 분석)…');
+      }
+      final wav = '${tmp.path}/audio.wav';
+      await extractAudio(path, wav);
+      final speech = await detectSpeech(wav, await ensureVadModel());
+      final notes = <String>[];
+
+      // 원어 자막: 현재 목록에 바로 적용 (번역은 줄 순서로 붙어 있어 그대로 유지)
+      if (_onlineOriginal) {
+        final r = findBestSync(cues, speech);
+        debugPrint(
+          'sync original: ${r.describe()} score ${r.baseScore} → ${r.score} / ${r.total}',
+        );
+        if (r.improves) {
+          _setCues(applySync(cues, r));
+          notes.add('원문 ${r.describe()}');
+        }
+      }
+      // 한국어 자막: 따로 맞춘 뒤 원문에 다시 붙인다 (다른 릴리스용일 수 있음)
+      final ko = _onlineKorean;
+      if (ko != null) {
+        final r = findBestSync(ko, speech);
+        debugPrint(
+          'sync korean: ${r.describe()} score ${r.baseScore} → ${r.score} / ${r.total}',
+        );
+        if (r.improves) {
+          final fixed = applySync(ko, r);
+          final cleared = [for (final c in cues) c.withTranslation(null)];
+          _setCues(mergeTranslation(cleared, fixed));
+          notes.add('한국어 ${r.describe()}');
+        }
+      }
+      syncInfo = notes.isEmpty ? '싱크 정상' : '싱크 자동 보정: ${notes.join(', ')}';
+      await _saveCache();
+      if (stage == JobStage.done || stage == JobStage.preparing) {
+        _set(JobStage.done, _summary());
+      } else if (!_disposed) {
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('auto sync failed: $e');
+      syncInfo = '싱크 자동 보정 실패';
+    } finally {
+      await tmp.delete(recursive: true);
+    }
+  }
+
+  String? syncInfo;
+
+  /// 수동 싱크 조정 ([ / ] 키). 저장된 결과에도 반영.
+  Future<void> nudge(Duration d) async {
+    if (cues.isEmpty) return;
+    manualOffset += d;
+    _setCues(shiftCues(cues, d));
+    await _saveCache();
+  }
 
   /// OpenSubtitles에서 원어/한국어 자막을 찾는다. 원어를 찾으면 true.
   /// 실패해도 예외를 내지 않고 음성 인식으로 넘어간다.
@@ -295,11 +381,13 @@ class SubtitleJob extends ChangeNotifier {
       _set(JobStage.preparing, '자막 내려받는 중 (OpenSubtitles)…');
       var c = parseWebVtt(await os.download(origHit.fileId));
       if (c.isEmpty) return false;
+      _onlineOriginal = true;
+      _onlineKorean = koCues;
       if (koCues != null) c = mergeTranslation(c, koCues);
       sourceLang = lang.split('-').first;
       originalFrom = origHit.hashMatch
           ? 'OpenSubtitles · 파일 일치'
-          : 'OpenSubtitles · 이름 검색 (싱크 확인 필요)';
+          : 'OpenSubtitles · 이름 검색';
       _setCues(c);
       return true;
     } on Exception catch (e) {

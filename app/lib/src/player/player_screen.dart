@@ -193,6 +193,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _player.setVolume((_player.state.volume + 5).clamp(0, 100)),
     const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
         _player.setVolume((_player.state.volume - 5).clamp(0, 100)),
+    // 자막 싱크 수동 조정: [ 0.2초 빠르게, ] 0.2초 늦게
+    const SingleActivator(LogicalKeyboardKey.bracketLeft): () =>
+        _nudge(const Duration(milliseconds: -200)),
+    const SingleActivator(LogicalKeyboardKey.bracketRight): () =>
+        _nudge(const Duration(milliseconds: 200)),
     const SingleActivator(LogicalKeyboardKey.keyF): () =>
         _videoKey.currentState?.toggleFullscreen(),
     const SingleActivator(LogicalKeyboardKey.escape): () {
@@ -200,6 +205,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (v != null && v.isFullscreen()) v.exitFullscreen();
     },
   };
+
+  Future<void> _nudge(Duration d) async {
+    final job = _job;
+    if (job == null) return;
+    await job.nudge(d);
+    final s = job.manualOffset.inMilliseconds / 1000;
+    _toast('자막 ${s >= 0 ? '+' : ''}${s.toStringAsFixed(1)}초 ([ 빠르게 / ] 늦게)');
+  }
 
   void _seekBy(Duration d) {
     final p = _player.state.position + d;
