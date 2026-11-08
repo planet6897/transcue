@@ -173,6 +173,17 @@ SyncResult findBestSync(
   );
 }
 
+/// 자막 길이가 영상과 맞는지 (다른 작품/편집본 자막 걸러내기).
+/// 자막이 영상 끝을 크게 넘거나, 긴 영상의 절반도 안 덮으면 false.
+/// 실사례: 14분 영상에 105분짜리 자막.
+bool fitsDuration(List<BilingualCue> cues, Duration video) {
+  if (cues.isEmpty || video <= Duration.zero) return true;
+  final last = cues.map((c) => c.end).reduce((a, b) => a > b ? a : b);
+  if (last > video * 1.1 + const Duration(minutes: 1)) return false;
+  if (video > const Duration(minutes: 10) && last < video * 0.5) return false;
+  return true;
+}
+
 /// 변환 적용 (번역은 그대로 유지)
 List<BilingualCue> applySync(List<BilingualCue> cues, SyncResult r) =>
     shiftCues(cues, r.offset, scale: r.scale);

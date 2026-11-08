@@ -81,7 +81,17 @@ class SubtitleHit {
     required this.downloads,
     required this.machine,
     required this.release,
+    this.title = '',
+    this.parentTitle = '',
+    this.season,
+    this.episode,
   });
+
+  /// 자막이 속한 작품 정보 (feature_details) — 이름 검색 결과 검증용
+  final String title;
+  final String parentTitle;
+  final int? season;
+  final int? episode;
 
   final int fileId;
   final String language;
@@ -99,6 +109,7 @@ class SubtitleHit {
       final files = (a['files'] as List? ?? []).cast<Map>();
       // 여러 파일(CD1/CD2)로 나뉜 자막은 제외
       if (files.length != 1 || files.first['file_id'] == null) continue;
+      final f = (a['feature_details'] as Map?) ?? {};
       out.add(
         SubtitleHit(
           fileId: (files.first['file_id'] as num).toInt(),
@@ -108,6 +119,10 @@ class SubtitleHit {
           machine:
               a['machine_translated'] == true || a['ai_translated'] == true,
           release: '${a['release'] ?? ''}',
+          title: '${f['title'] ?? f['movie_name'] ?? ''}',
+          parentTitle: '${f['parent_title'] ?? ''}',
+          season: (f['season_number'] as num?)?.toInt(),
+          episode: (f['episode_number'] as num?)?.toInt(),
         ),
       );
     }
@@ -115,14 +130,55 @@ class SubtitleHit {
   }
 }
 
+const _stop = {'the', 'a', 'an', 'and', 'of', 'for', 'to', 'in', 'on', '&'};
+
+Set<String> _tokens(String s) => s
+    .toLowerCase()
+    .replaceAll(RegExp(r"['’]"), '')
+    .split(RegExp(r'[^a-z0-9가-힣ぁ-んァ-ン一-龥]+'))
+    .where((t) => t.isNotEmpty && !_stop.contains(t))
+    .toSet();
+
+/// 제목 유사도 (단어 집합 Jaccard, 0~1)
+double titleSimilarity(String a, String b) {
+  final x = _tokens(a), y = _tokens(b);
+  if (x.isEmpty || y.isEmpty) return 0;
+  return x.intersection(y).length / x.union(y).length;
+}
+
+/// 이름 검색 결과가 이 파일의 작품이 맞는지.
+/// 파일 해시가 일치하면 믿고, 아니면 제목(드라마는 시즌/에피소드까지)이 맞아야 한다.
+/// (실사례: '2 Girls Going 4 Broke' → 'Chief Daddy 2: Going for Broke'가 잡혀 엉뚱한 자막)
+bool matchesRelease(SubtitleHit h, ReleaseName name) {
+  if (h.hashMatch) return true;
+  final sim = [
+    titleSimilarity(name.title, h.title),
+    titleSimilarity(name.title, h.parentTitle),
+  ].reduce((a, b) => a > b ? a : b);
+  if (sim < 0.6) return false;
+  if (name.isEpisode && (h.season != null || h.episode != null)) {
+    return h.season == name.season && h.episode == name.episode;
+  }
+  return true;
+}
+
 /// 해당 언어에서 가장 좋은 자막: 해시 일치 > 사람 번역 > 다운로드 수
-SubtitleHit? pickBest(List<SubtitleHit> hits, String lang) {
-  final c = hits.where((h) => h.language.toLowerCase() == lang).toList()
-    ..sort((a, b) {
-      if (a.hashMatch != b.hashMatch) return a.hashMatch ? -1 : 1;
-      if (a.machine != b.machine) return a.machine ? 1 : -1;
-      return b.downloads.compareTo(a.downloads);
-    });
+/// [name]을 주면 제목이 맞지 않는 결과는 뺀다.
+SubtitleHit? pickBest(
+  List<SubtitleHit> hits,
+  String lang, {
+  ReleaseName? name,
+}) {
+  final c =
+      hits
+          .where((h) => h.language.toLowerCase() == lang)
+          .where((h) => name == null || matchesRelease(h, name))
+          .toList()
+        ..sort((a, b) {
+          if (a.hashMatch != b.hashMatch) return a.hashMatch ? -1 : 1;
+          if (a.machine != b.machine) return a.machine ? 1 : -1;
+          return b.downloads.compareTo(a.downloads);
+        });
   return c.firstOrNull;
 }
 

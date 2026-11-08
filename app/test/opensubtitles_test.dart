@@ -96,6 +96,87 @@ void main() {
       await dir.delete(recursive: true);
     }
   });
+
+  group('matchesRelease (이름 검색 결과 검증)', () {
+    SubtitleHit hit({
+      String title = '',
+      String parent = '',
+      int? season,
+      int? episode,
+      bool hash = false,
+    }) => SubtitleHit(
+      fileId: 1,
+      language: 'en',
+      hashMatch: hash,
+      downloads: 0,
+      machine: false,
+      release: '',
+      title: title,
+      parentTitle: parent,
+      season: season,
+      episode: episode,
+    );
+
+    test('real case: different show with overlapping words is rejected', () {
+      final name = parseReleaseName(
+        '/x/2 Broke Girls (2011)/Featurettes/Season 1/2 Girls Going 4 Broke.mkv',
+      );
+      expect(
+        matchesRelease(hit(title: 'Chief Daddy 2: Going for Broke'), name),
+        isFalse,
+      );
+    });
+    test('same show, right episode', () {
+      final name = parseReleaseName(
+        'Knight Rider S01E01-E02 Knight of the Phoenix.mkv',
+      );
+      expect(
+        matchesRelease(
+          hit(
+            title: 'Knight of the Phoenix',
+            parent: 'Knight Rider',
+            season: 1,
+            episode: 1,
+          ),
+          name,
+        ),
+        isTrue,
+      );
+    });
+    test('same show, wrong episode is rejected', () {
+      final name = parseReleaseName('Knight Rider S01E01.mkv');
+      expect(
+        matchesRelease(
+          hit(parent: 'Knight Rider', season: 1, episode: 5),
+          name,
+        ),
+        isFalse,
+      );
+    });
+    test('hash match is always trusted', () {
+      final name = parseReleaseName('totally_random_name.mkv');
+      expect(
+        matchesRelease(hit(title: 'Something Else', hash: true), name),
+        isTrue,
+      );
+    });
+    test('movie title', () {
+      final name = parseReleaseName('The.Matrix.1999.1080p.mkv');
+      expect(matchesRelease(hit(title: 'The Matrix'), name), isTrue);
+      expect(matchesRelease(hit(title: 'The Matrix Reloaded'), name), isFalse);
+    });
+    test('pickBest skips non-matching titles', () {
+      final name = parseReleaseName('2 Girls Going 4 Broke.mkv');
+      expect(
+        pickBest(
+          [hit(title: 'Chief Daddy 2: Going for Broke')],
+          'en',
+          name: name,
+        ),
+        isNull,
+      );
+    });
+  });
 }
 
 const _expected200k = '5f9fe02060a3cd40';

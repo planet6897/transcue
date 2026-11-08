@@ -175,14 +175,22 @@ class SubtitleJob extends ChangeNotifier {
       _osTried = j['osTried'] == true;
       syncInfo = j['sync'] as String?;
       _complete = j['complete'] != false;
+      final saved = [
+        for (final c in (j['cues'] as List).cast<Map<String, dynamic>>())
+          BilingualCue.fromJson(c),
+      ];
+      if (source case LocalFileSource(:final path) when _complete) {
+        // 예전에 잘못 받은 인터넷 자막 등: 영상 길이와 안 맞으면 버리고 다시 만든다
+        if (!fitsDuration(saved, (await probe(path)).duration)) {
+          debugPrint('cache rejected: subtitles do not fit the video length');
+          return false;
+        }
+      }
       for (final c in (j['covered'] as List? ?? []).cast<List>()) {
         _addCovered((c[0] as num).toInt(), (c[1] as num).toInt());
       }
       _fromCache = true;
-      _setCues([
-        for (final c in (j['cues'] as List).cast<Map<String, dynamic>>())
-          BilingualCue.fromJson(c),
-      ]);
+      _setCues(saved);
       return true;
     } catch (_) {
       return false;
@@ -411,8 +419,8 @@ class SubtitleJob extends ChangeNotifier {
         languages: lang == 'ko' ? 'ko' : '$lang,ko',
       );
       _osTried = true; // 검색이 성공했을 때만 기록 (키 오류면 다음에 다시 시도)
-      final origHit = pickBest(hits, lang);
-      final koHit = lang == 'ko' ? null : pickBest(hits, 'ko');
+      final origHit = pickBest(hits, lang, name: name);
+      final koHit = lang == 'ko' ? null : pickBest(hits, 'ko', name: name);
       debugPrint(
         'OpenSubtitles ${name.title} S${name.season}E${name.episode} '
         'hash=$hash hits=${hits.length} orig=${origHit?.release} ko=${koHit?.release}',
@@ -422,6 +430,12 @@ class SubtitleJob extends ChangeNotifier {
       if (koHit != null) {
         _set(JobStage.preparing, '한국어 자막 내려받는 중 (OpenSubtitles)…');
         koCues = parseWebVtt(await os.download(koHit.fileId));
+        if (!fitsDuration(koCues, info.duration)) {
+          debugPrint(
+            'OpenSubtitles korean rejected: length does not fit the video',
+          );
+          koCues = null;
+        }
       }
       if (origHit == null) {
         _onlineKorean = koCues;
@@ -430,6 +444,13 @@ class SubtitleJob extends ChangeNotifier {
       _set(JobStage.preparing, '자막 내려받는 중 (OpenSubtitles)…');
       var c = parseWebVtt(await os.download(origHit.fileId));
       if (c.isEmpty) return false;
+      if (!fitsDuration(c, info.duration)) {
+        // 다른 작품/편집본 자막: 싱크로 맞출 수 없으니 음성 인식을 쓴다
+        notice = '인터넷 자막이 영상 길이와 맞지 않아 음성 인식을 사용합니다';
+        _onlineKorean = koCues;
+        if (!_disposed) notifyListeners();
+        return false;
+      }
       _onlineOriginal = true;
       _onlineKorean = koCues;
       if (koCues != null) c = mergeTranslation(c, koCues);

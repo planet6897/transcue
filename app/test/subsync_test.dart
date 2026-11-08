@@ -66,4 +66,18 @@ Speech segment 1: start = 15495.00, end = 15571.50
     final s = shiftCues(cues.take(1).toList(), const Duration(hours: -1));
     expect(s.first.start, Duration.zero);
   });
+
+  test('fitsDuration: real case 105-min subtitles on a 14-min video', () {
+    BilingualCue at(int min) => BilingualCue(
+      start: Duration(minutes: min),
+      end: Duration(minutes: min, seconds: 2),
+      original: 'x',
+    );
+    const video14 = Duration(minutes: 14, seconds: 7);
+    expect(fitsDuration([at(1), at(105)], video14), isFalse);
+    expect(fitsDuration([at(1), at(13)], video14), isTrue);
+    expect(fitsDuration([at(1), at(30)], const Duration(minutes: 96)), isFalse);
+    expect(fitsDuration([at(1), at(94)], const Duration(minutes: 96)), isTrue);
+    expect(fitsDuration(const [], video14), isTrue);
+  });
 }
