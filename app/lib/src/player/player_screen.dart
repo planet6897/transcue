@@ -19,6 +19,7 @@ import '../pipeline/tools.dart';
 import 'file_browser.dart';
 import 'playlist.dart';
 import 'resume.dart';
+import 'volume_gesture.dart';
 
 /// 플레이어 화면: 로컬 파일 / YouTube 재생 + 이중 자막 오버레이.
 /// 영상을 열면 [SubtitleJob]이 자막 확보(캐시·내장·YouTube·STT)와 번역을 진행한다.
@@ -643,6 +644,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             MaterialVideoControls(state)
                           else
                             MaterialDesktopVideoControls(state),
+                          // 위로 밀면 소리 크게, 아래로 밀면 작게 (조작부 위에 겹침)
+                          if (Platform.isAndroid) const VolumeDragLayer(),
                         ],
                       ),
                     ),

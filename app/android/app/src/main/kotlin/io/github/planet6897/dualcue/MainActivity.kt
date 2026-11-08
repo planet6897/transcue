@@ -3,6 +3,7 @@ package io.github.planet6897.dualcue
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -22,6 +23,27 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         WhisperBridge(flutterEngine.dartExecutor.binaryMessenger)
+        // 화면 위/아래로 밀어 소리 조절: 기기 미디어 음량 (볼륨 버튼과 같은 값, 0~1)
+        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dualcue/volume")
+            .setMethodCallHandler { call, result ->
+                val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                when (call.method) {
+                    "get" -> result.success(
+                        audio.getStreamVolume(AudioManager.STREAM_MUSIC).toDouble() / max,
+                    )
+                    "set" -> {
+                        val v = (call.arguments as Number).toDouble().coerceIn(0.0, 1.0)
+                        audio.setStreamVolume(
+                            AudioManager.STREAM_MUSIC, Math.round(v * max).toInt(), 0,
+                        )
+                        result.success(
+                            audio.getStreamVolume(AudioManager.STREAM_MUSIC).toDouble() / max,
+                        )
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dualcue/permission")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
