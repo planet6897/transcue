@@ -51,6 +51,10 @@ enum WhisperModel {
 
   String get url =>
       'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$file';
+
+  /// 기기별 기본값. 태블릿 실측(갤럭시 탭 S9): turbo는 49초 소리에 34~98초 → 재생을 겨우 따라감
+  static WhisperModel get platformDefault =>
+      Platform.isAndroid || Platform.isIOS ? small : turbo;
 }
 
 /// 앱 설정. 앱 지원 폴더의 settings.json에 저장한다.
@@ -61,14 +65,14 @@ class AppSettings {
   AppSettings({
     this.claudeApiKey = '',
     this.claudeModel = ClaudeModel.opus,
-    this.whisperModel = WhisperModel.turbo,
+    WhisperModel? whisperModel,
     this.osApiKey = '',
     this.osUsername = '',
     this.osPassword = '',
     this.showVocab = false,
     this.vocabLevel = VocabLevel.intermediate,
     this.autoPlayNext = true,
-  });
+  }) : whisperModel = whisperModel ?? WhisperModel.platformDefault;
 
   /// 연속 재생: 영상이 끝나면 같은 폴더의 다음 영상을 연다
   bool autoPlayNext;
@@ -112,7 +116,7 @@ class AppSettings {
         ),
         whisperModel: WhisperModel.values.firstWhere(
           (m) => m.name == j['whisperModel'],
-          orElse: () => WhisperModel.turbo,
+          orElse: () => WhisperModel.platformDefault,
         ),
         osApiKey: j['osApiKey'] as String? ?? '',
         osUsername: j['osUsername'] as String? ?? '',

@@ -27,7 +27,7 @@ class WhisperBridge(messenger: BinaryMessenger) {
             val model = call.argument<String>("model")!!
             val vad = call.argument<String>("vad")
             val lang = call.argument<String>("lang") ?: "auto"
-            val threads = call.argument<Int>("threads") ?: 4
+            val threads = call.argument<Int>("threads") ?: bigCores
             worker.execute {
                 try {
                     val t0 = System.currentTimeMillis()
@@ -61,6 +61,19 @@ class WhisperBridge(messenger: BinaryMessenger) {
 
     companion object {
         const val SAMPLE_RATE = 16000
+
+        /// 빠른 코어 수. 느린 코어까지 쓰면 연산마다 느린 코어를 기다려 전체가 느려진다
+        /// (갤럭시 탭 S9: 3.36GHz×1 + 2.8GHz×4 + 2.0GHz×3 → 5)
+        val bigCores: Int by lazy {
+            val freqs = (0 until Runtime.getRuntime().availableProcessors()).mapNotNull {
+                runCatching {
+                    java.io.File("/sys/devices/system/cpu/cpu$it/cpufreq/cpuinfo_max_freq")
+                        .readText().trim().toLong()
+                }.getOrNull()
+            }
+            if (freqs.isEmpty()) 4
+            else freqs.count { it > freqs.min() }.takeIf { it >= 2 } ?: freqs.size
+        }
 
         /// [startMs, startMs+lengthMs] 구간의 소리 → 16kHz 모노 float
         fun decodeAudio(path: String, startMs: Long, lengthMs: Long): FloatArray {

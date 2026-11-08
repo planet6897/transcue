@@ -65,8 +65,7 @@ Stream<SttEvent> _transcribeAndroid(
     'model': model.path,
     'vad': vad?.path,
     'lang': language,
-    // 큰 코어 위주 (작은 코어까지 쓰면 오히려 느려짐)
-    'threads': (Platform.numberOfProcessors - 2).clamp(2, 6),
+    // threads: 생략 → 빠른 코어 수 (WhisperBridge.bigCores)
   });
   debugPrint(
     '[stt] android ${start.inSeconds}s+${length.inSeconds}s: '

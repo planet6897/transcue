@@ -18,8 +18,9 @@ set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
-# 최근 ARM(갤럭시 탭 S9 등): 내적·반정밀도 명령 사용
-set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
+# 최근 ARM(갤럭시 탭 S9 등): 내적·반정밀도·8비트 행렬곱(i8mm) 명령 사용
+# TODO: i8mm 없는 구형 기기용 빌드를 따로 두기 (지금은 2022년 이후 기기 대상)
+set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16+i8mm" CACHE STRING "" FORCE)
 
 include(FetchContent)
 FetchContent_Declare(
