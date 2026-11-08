@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show AppExitResponse;
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
@@ -54,9 +55,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Timer? _positionTimer;
   StreamSubscription<bool>? _playingSub;
 
+  /// 앱 종료 전에 플레이어를 먼저 닫는다.
+  /// 안 닫으면 Dart가 내려간 뒤 mpv가 이벤트를 보내 종료 시 비정상 종료(SIGABRT)된다
+  /// (크래시 리포트: DLRT_GetFfiCallbackMetadata ← mp_client_send_property_changes)
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(
+    onExitRequested: _beforeExit,
+  );
+  bool _playerClosed = false;
+
+  Future<AppExitResponse> _beforeExit() async {
+    await _rememberPosition();
+    if (!_playerClosed) {
+      _playerClosed = true;
+      await _player.dispose();
+    }
+    return AppExitResponse.exit;
+  }
+
   @override
   void initState() {
     super.initState();
+    _lifecycle; // 종료 요청 감시 시작
     if (kDebugMode) {
       final vol = double.tryParse(Platform.environment['DUALCUE_VOLUME'] ?? '');
       if (vol != null) unawaited(_player.setVolume(vol));
@@ -95,9 +114,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _playingSub?.cancel();
     _positionTimer?.cancel();
     unawaited(_rememberPosition());
+    _lifecycle.dispose();
     _job?.dispose();
     _view.dispose();
-    _player.dispose();
+    if (!_playerClosed) {
+      _playerClosed = true;
+      _player.dispose();
+    }
     super.dispose();
   }
 
