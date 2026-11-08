@@ -35,19 +35,31 @@ class BilingualCue {
   );
 }
 
-/// 재생 위치에 해당하는 큐를 찾는다. (큐는 start 기준 정렬되어 있다고 가정)
-BilingualCue? cueAt(List<BilingualCue> cues, Duration t) {
-  var lo = 0, hi = cues.length - 1;
-  while (lo <= hi) {
+/// 재생 위치에 표시할 큐를 찾는다. (큐는 start 기준 정렬되어 있다고 가정)
+///
+/// [linger]: 자막이 끝난 뒤 더 보여 줄 시간. 단, 다음 자막이 시작하면 거기서 끝낸다.
+/// 예) linger 1초 → min(끝 + 1초, 다음 자막 시작)까지 표시
+BilingualCue? cueAt(
+  List<BilingualCue> cues,
+  Duration t, {
+  Duration linger = Duration.zero,
+}) {
+  // start <= t 인 마지막 큐
+  var lo = 0, hi = cues.length;
+  while (lo < hi) {
     final mid = (lo + hi) >> 1;
-    final c = cues[mid];
-    if (t < c.start) {
-      hi = mid - 1;
-    } else if (t >= c.end) {
+    if (cues[mid].start <= t) {
       lo = mid + 1;
     } else {
-      return c;
+      hi = mid;
     }
   }
-  return null;
+  final i = lo - 1;
+  if (i < 0) return null;
+  final c = cues[i];
+  var until = c.end + linger;
+  if (i + 1 < cues.length && cues[i + 1].start < until) {
+    until = cues[i + 1].start;
+  }
+  return t < until ? c : null;
 }

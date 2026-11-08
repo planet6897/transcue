@@ -31,6 +31,9 @@ class DualSubtitleState extends ChangeNotifier {
   }
 }
 
+/// 자막이 끝난 뒤 더 보여 주는 시간 (다음 자막이 먼저 시작하면 거기까지)
+const lingerAfterCue = Duration(seconds: 1);
+
 /// 재생 위치를 따라 이중 자막을 그린다. 일반 화면/전체 화면 모두에서 동작.
 class LiveDualSubtitle extends StatelessWidget {
   const LiveDualSubtitle({
@@ -56,7 +59,11 @@ class LiveDualSubtitle extends StatelessWidget {
           stream: position,
           initialData: currentPosition(),
           builder: (context, snap) => DualSubtitleOverlay(
-            cue: cueAt(view.cues, snap.data ?? Duration.zero),
+            cue: cueAt(
+              view.cues,
+              snap.data ?? Duration.zero,
+              linger: lingerAfterCue,
+            ),
             showOriginal: view.showOriginal,
             showTranslation: view.showTranslation,
           ),
