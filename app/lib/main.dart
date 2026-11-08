@@ -6,16 +6,16 @@ import 'src/player/player_screen.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
-  runApp(const DualCueApp());
+  runApp(const TranscueApp());
 }
 
-class DualCueApp extends StatelessWidget {
-  const DualCueApp({super.key});
+class TranscueApp extends StatelessWidget {
+  const TranscueApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'DualCue',
+      title: 'Transcue',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(

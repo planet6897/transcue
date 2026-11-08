@@ -1,8 +1,8 @@
-# DualCue
+# Transcue
 
 동영상의 음성을 자막으로 만들고(STT), AI로 번역해 **원어 자막과 한국어 자막을 함께** 보여주는 언어학습용 동영상 플레이어.
 
-- 플랫폼: macOS, Windows (예정: iOS, Android)
+- 플랫폼: macOS, Windows, Android (예정: iOS)
 - 스택: Flutter + media_kit(libmpv) · Rust 코어(whisper.cpp, FFmpeg) · Claude / OpenAI / Gemini 번역
 
 자세한 계획은 [docs/PLAN.md](docs/PLAN.md) 참고.

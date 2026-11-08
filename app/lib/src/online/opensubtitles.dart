@@ -262,7 +262,7 @@ class OpenSubtitlesClient {
   final String username;
   final String password;
 
-  static const userAgent = 'DualCue v0.1.0';
+  static const userAgent = 'Transcue v0.1.0';
   String _host = 'api.opensubtitles.com';
   String? _token;
 

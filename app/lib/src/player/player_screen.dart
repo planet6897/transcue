@@ -44,7 +44,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   AppSettings _settings = AppSettings();
   SubtitleJob? _job;
-  String _title = 'DualCue';
+  String _title = 'Transcue';
   bool _loading = false;
 
   /// 지금 재생 중인 로컬 파일 (YouTube면 null) — 연속 재생 기준

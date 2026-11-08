@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "io.github.planet6897" "\0"
-            VALUE "FileDescription", "dualcue" "\0"
+            VALUE "FileDescription", "Transcue" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "dualcue" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 io.github.planet6897. All rights reserved." "\0"
             VALUE "OriginalFilename", "dualcue.exe" "\0"
-            VALUE "ProductName", "dualcue" "\0"
+            VALUE "ProductName", "Transcue" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
