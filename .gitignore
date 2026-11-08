@@ -1,0 +1,7 @@
+.DS_Store
+.idea/
+.vscode/
+/core/target/
+*.ggml
+*.bin
+.env

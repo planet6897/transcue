@@ -1,0 +1,14 @@
+[package]
+name = "dualcue_core"
+version = "0.1.0"
+edition = "2024"
+description = "DualCue core: subtitle model, STT/translation pipeline"
+license = "MIT"
+
+[lib]
+# rlib: Rust 테스트/CLI용, cdylib/staticlib: flutter_rust_bridge 연동용
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"

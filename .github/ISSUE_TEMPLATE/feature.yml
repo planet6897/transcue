@@ -1,0 +1,14 @@
+name: 기능 요청
+description: 새 기능이나 개선
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: 무엇을, description: 만들 기능 설명 }
+    validations: { required: true }
+  - type: textarea
+    id: why
+    attributes: { label: 왜, description: 학습자에게 어떤 도움이 되는지 }
+  - type: textarea
+    id: done
+    attributes: { label: 완료 기준, placeholder: "- [ ] ..." }
