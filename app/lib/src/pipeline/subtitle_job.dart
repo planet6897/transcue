@@ -410,9 +410,12 @@ class SubtitleJob extends ChangeNotifier {
 
   /// [c]가 실제 음성과 같은 내용이면 true (판단 못 하거나 확인이 실패해도 true).
   /// 안 맞으면 [notice]를 남긴다.
-  Future<bool> _speechMatches(List<BilingualCue> c) async {
+  Future<bool> _speechMatches(List<BilingualCue> c, {String? lang}) async {
     if (_dbg('DUALCUE_NO_VERIFY') || !canTranscribe) return true;
     final path = (source as LocalFileSource).path;
+    // 확인하는 동안에도 자막(원문)은 바로 보여 준다. 번역은 확인이 끝난 뒤에.
+    final before = cues;
+    _setCues(c);
     try {
       _set(JobStage.preparing, '자막이 음성과 맞는지 확인 중…');
       final model = await ensureWhisperModel(
@@ -429,7 +432,9 @@ class SubtitleJob extends ChangeNotifier {
         duration: (await _probe(path)).duration,
         model: model,
         vadModel: await ensureVadModel(),
-        language: sourceLang ?? 'auto',
+        language: lang ?? sourceLang ?? 'auto',
+        onSample: (n) =>
+            _set(JobStage.preparing, '자막이 음성과 맞는지 확인 중 ($n번째 구간)…'),
       );
       debugPrint(
         'speech check: ${r.describe()} (${r.matched}/${r.pairs}, ${r.samples}구간)',
@@ -442,7 +447,7 @@ class SubtitleJob extends ChangeNotifier {
       notice =
           '받은 자막이 음성과 맞지 않아(${(r.ratio * 100).round()}% 일치) '
           '음성 인식 자막을 사용합니다';
-      if (!_disposed) notifyListeners();
+      _setCues(before); // 보여 주던 받은 자막을 거둔다
       return false;
     } on Exception catch (e) {
       debugPrint('speech check failed: $e');
@@ -597,7 +602,7 @@ class SubtitleJob extends ChangeNotifier {
         return false;
       }
       // 실제 음성과 같은 내용인지
-      if (!await _speechMatches(c)) {
+      if (!await _speechMatches(c, lang: lang.split('-').first)) {
         _onlineKorean = null; // 같은 검색에서 나온 한국어 자막도 믿을 수 없다
         return false;
       }

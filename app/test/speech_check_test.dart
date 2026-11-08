@@ -81,4 +81,12 @@ void main() {
     expect(koreanCoverage([cue(0, 'a', t: '가'), cue(5, 'b')]), 0.5);
     expect(koreanCoverage(const []), 0);
   });
+
+  test('결과가 뚜렷하면 일찍 끝냄 (태블릿 시간 절약)', () {
+    expect(isDecided(10, 20), isFalse, reason: '단어 쌍이 너무 적음');
+    expect(isDecided(40, 45), isTrue, reason: '89% — 분명히 맞음');
+    expect(isDecided(3, 40), isTrue, reason: '8% — 분명히 다름');
+    expect(isDecided(18, 40), isFalse, reason: '45% — 애매하면 더 들어 봄');
+    expect(isDecided(30, 60), isTrue, reason: '충분히 들었음');
+  });
 }

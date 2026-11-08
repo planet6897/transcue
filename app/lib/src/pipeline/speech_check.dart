@@ -81,8 +81,8 @@ List<String> speechWords(String s) => [
   return (matched: matched, pairs: pairs);
 }
 
-/// 영상의 20~80% 사이 여러 곳을 받아 적어 자막과 대조한다.
-/// 말소리가 충분히 모이면(단어 쌍 80개, 2구간 이상) 일찍 끝낸다.
+/// 영상의 15~85% 사이 여러 곳을 받아 적어 자막과 대조한다.
+/// 결과가 분명하면 일찍 끝낸다 (태블릿은 30초 구간 하나에 30~60초 걸림).
 Future<SpeechCheck> checkAgainstSpeech({
   required String input,
   required List<BilingualCue> cues,
@@ -90,14 +90,17 @@ Future<SpeechCheck> checkAgainstSpeech({
   required File model,
   File? vadModel,
   String language = 'auto',
+  void Function(int sample)? onSample,
 }) async {
   final tmp = await Directory.systemTemp.createTemp('dualcue_check_');
   var matched = 0, pairs = 0, samples = 0;
   try {
+    var tried = 0;
     for (final f in [0.25, 0.5, 0.75, 0.35, 0.65, 0.15, 0.85]) {
-      if (samples >= 2 && pairs >= 80) break;
+      if (isDecided(matched, pairs)) break;
       final from = duration * f;
       if (from + _sampleLen > duration) continue;
+      onSample?.call(++tried);
       final spoken = <String>[];
       await for (final ev in transcribeRange(
         input: input,
@@ -120,6 +123,15 @@ Future<SpeechCheck> checkAgainstSpeech({
     await tmp.delete(recursive: true);
   }
   return SpeechCheck(matched: matched, pairs: pairs, samples: samples);
+}
+
+/// 그만 들어 봐도 되는지: 단어 쌍이 충분하거나, 30개 이상인데 결과가 뚜렷할 때
+/// (실측: 맞는 자막 87~100%, 다른 작품 0~11%)
+bool isDecided(int matched, int pairs) {
+  if (pairs >= 60) return true;
+  if (pairs < SpeechCheck.minPairs) return false;
+  final r = matched / pairs;
+  return r >= 0.6 || r <= 0.15;
 }
 
 /// 한국어 자막이 붙은 원문 줄 비율 (시간이 맞는 한국어 자막이면 대부분 채워진다)
