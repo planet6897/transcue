@@ -176,6 +176,32 @@ void main() {
           isTrue,
         );
       });
+      test('실사례: 릴리스 이름의 시즌이 다르면 제외 (S01E03 → S04 자막)', () {
+        expect(
+          matchesRelease(
+            hit(
+              parent: 'Knight Rider',
+              season: 1,
+              episode: 3,
+              release: 'Knight.Rider.S04.DVDRip.XviD-MEDiEVAL',
+            ),
+            name,
+          ),
+          isFalse,
+        );
+        expect(
+          matchesRelease(
+            hit(
+              parent: 'Knight Rider',
+              season: 1,
+              episode: 3,
+              release: 'Knight.Rider.S01E03.DVDRip',
+            ),
+            name,
+          ),
+          isTrue,
+        );
+      });
       test('1080p 같은 숫자는 연도로 보지 않음', () {
         expect(parseReleaseName('/x/Show S01E01.1080p.mkv').year, isNull);
       });

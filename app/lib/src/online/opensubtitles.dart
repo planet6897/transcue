@@ -179,6 +179,13 @@ bool matchesRelease(SubtitleHit h, ReleaseName name) {
   ].reduce((a, b) => a > b ? a : b);
   if (sim < 0.6) return false;
   if (!_yearFits(h, name)) return false;
+  // 릴리스 이름의 시즌이 다르면 제외 (실사례: S01E03 → Knight.Rider.S04.DVDRip)
+  if (name.isEpisode) {
+    final m = RegExp(
+      r'(?:^|[\s._\-])[sS](\d{1,2})(?:[eE]\d|[\s._\-]|$)',
+    ).firstMatch(h.release);
+    if (m != null && int.parse(m[1]!) != name.season) return false;
+  }
   if (name.isEpisode && (h.season != null || h.episode != null)) {
     return h.season == name.season && h.episode == name.episode;
   }

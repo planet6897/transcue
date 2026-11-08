@@ -15,6 +15,7 @@ import '../source/youtube_url.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
 import 'playlist.dart';
+import 'resume.dart';
 
 /// 플레이어 화면: 로컬 파일 / YouTube 재생 + 이중 자막 오버레이.
 /// 영상을 열면 [SubtitleJob]이 자막 확보(캐시·내장·YouTube·STT)와 번역을 진행한다.
@@ -47,6 +48,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   String? _currentPath;
   StreamSubscription<bool>? _completedSub;
 
+  /// 이어 보기: 지금 영상의 키와 위치 기록
+  PlaybackPositions? _positions;
+  String? _resumeKey;
+  Timer? _positionTimer;
+  StreamSubscription<bool>? _playingSub;
+
   @override
   void initState() {
     super.initState();
@@ -59,6 +66,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
     _completedSub = _player.stream.completed.listen((done) {
       if (done) _onCompleted();
+    });
+    // 재생 중 5초마다, 그리고 일시정지할 때 위치를 기록
+    _positionTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_player.state.playing) unawaited(_rememberPosition());
+    });
+    _playingSub = _player.stream.playing.listen((p) {
+      if (!p) unawaited(_rememberPosition());
     });
     AppSettings.load().then((s) {
       setState(() => _settings = s);
@@ -78,6 +92,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void dispose() {
     _completedSub?.cancel();
+    _playingSub?.cancel();
+    _positionTimer?.cancel();
+    unawaited(_rememberPosition());
     _job?.dispose();
     _view.dispose();
     _player.dispose();
@@ -136,12 +153,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Future<void> _openPath(String path) async {
+    await _rememberPosition(); // 보던 영상의 위치를 먼저 기록
     setState(() {
       _title = path.split(Platform.pathSeparator).last;
       _currentPath = path;
     });
     if (kDebugMode) debugPrint('[open] $path');
+    _resumeKey = null;
+    final loaded = _durationLoaded();
     await _player.open(Media(path));
+    // 자막 작업은 재생 위치부터 시작하므로 이어 보기 위치로 먼저 옮긴다
+    await _resumeAt(PlaybackPositions.keyForPath(path), loaded);
     _startJob(LocalFileSource(path));
     if (kDebugMode) unawaited(_debugAutoplay());
   }
@@ -205,6 +227,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       });
       // 고화질은 영상/소리가 따로 온다. 소리는 영상이 실제로 로드된 뒤에 붙여야 한다
       // (open()은 로드 완료 전에 반환되고, 그 사이 mpv audio-add는 조용히 실패함)
+      await _rememberPosition();
+      _resumeKey = null;
       final loaded = _player.stream.duration
           .firstWhere((d) => d > Duration.zero)
           .timeout(const Duration(seconds: 30));
@@ -213,6 +237,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         await loaded;
         await _player.setAudioTrack(AudioTrack.uri(media.audioUrl!));
       }
+      await _resumeAt(PlaybackPositions.keyForYoutube(id), loaded);
       if (kDebugMode) unawaited(_debugAudioState());
       _startJob(YoutubeSource(media, _ytDlp));
     } catch (e) {
@@ -223,8 +248,55 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
+  Future<PlaybackPositions> _positionStore() async =>
+      _positions ??= PlaybackPositions(
+        File('${(await AppSettings.supportDir()).path}/positions.json'),
+      );
+
+  /// 새 영상의 길이가 알려질 때까지 (open 전에 불러 둔다)
+  Future<Duration?> _durationLoaded() => _player.stream.duration
+      .firstWhere((d) => d > Duration.zero)
+      .timeout(const Duration(seconds: 15))
+      .then<Duration?>((d) => d, onError: (_) => null);
+
+  /// 지금 영상의 재생 위치 기록
+  Future<void> _rememberPosition() async {
+    final key = _resumeKey;
+    if (key == null) return;
+    final store = await _positionStore();
+    final changed = await store.put(
+      key,
+      _player.state.position,
+      _player.state.duration,
+    );
+    if (changed) await store.save();
+  }
+
+  /// 이전에 보던 위치가 있으면 거기로 옮긴다
+  Future<void> _resumeAt(String key, Future<Duration?> loaded) async {
+    final at = await (await _positionStore()).get(key);
+    if (at != null && await loaded != null) {
+      await _player.seek(at);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text('이전에 보던 ${formatPosition(at)}부터 재생합니다'),
+              action: SnackBarAction(
+                label: '처음부터',
+                onPressed: () => _player.seek(Duration.zero),
+              ),
+            ),
+          );
+      }
+    }
+    _resumeKey = key; // 옮긴 뒤부터 기록 (옮기기 전 0초가 기록되지 않게)
+  }
+
   /// 영상이 끝났을 때: 연속 재생이 켜져 있으면 다음 영상
   void _onCompleted() {
+    unawaited(_rememberPosition()); // 끝까지 봤으면 기록 지움
     final path = _currentPath;
     if (!_settings.autoPlayNext || path == null) return;
     final next = neighborVideo(path);
@@ -306,6 +378,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     const SingleActivator(LogicalKeyboardKey.bracketRight): () =>
         _nudge(const Duration(milliseconds: 200)),
     const SingleActivator(LogicalKeyboardKey.keyV): _toggleVocab,
+    // 처음부터
+    const SingleActivator(LogicalKeyboardKey.home): () =>
+        _player.seek(Duration.zero),
     // 이전/다음 영상
     const SingleActivator(LogicalKeyboardKey.keyN): () => _skip(1),
     const SingleActivator(LogicalKeyboardKey.keyP): () => _skip(-1),
