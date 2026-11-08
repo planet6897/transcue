@@ -12,6 +12,7 @@ import '../subtitle/bilingual_cue.dart';
 import '../subtitle/webvtt.dart';
 import '../translate/claude_translator.dart';
 import 'media_tools.dart';
+import 'speech_check.dart';
 import 'subsync.dart';
 import 'whisper.dart';
 
@@ -153,6 +154,7 @@ class SubtitleJob extends ChangeNotifier {
         'osTried': _osTried,
         'sync': ?syncInfo,
         'release': ?_release,
+        'speech': ?speechMatch,
         // 음성 인식 중간 저장: 다시 열면 남은 구간만 이어서 인식
         'complete': _sttDone || originalFrom != fromStt,
         if (originalFrom == fromStt)
@@ -176,6 +178,7 @@ class SubtitleJob extends ChangeNotifier {
       _osTried = j['osTried'] == true;
       syncInfo = j['sync'] as String?;
       _release = j['release'] as String?;
+      speechMatch = (j['speech'] as num?)?.toDouble();
       // 이름 검색으로 받은 예전 결과는 연도 검사 전이라 다시 확인한다
       if (originalFrom == _fromNameSearch && _release == null) {
         debugPrint(
@@ -218,6 +221,8 @@ class SubtitleJob extends ChangeNotifier {
         have = true;
       }
       if (!cached && await _loadExistingSubtitles()) have = true;
+      // 받아 온 자막이 실제 음성과 같은 내용인지 확인 (번역 비용을 쓰기 전에)
+      if (have && _needsSpeechCheck && !await _checkSpeech()) have = false;
       if (!have) {
         // 처음부터, 또는 중간 저장된 음성 인식을 이어서
         await _speechToText();
@@ -231,6 +236,7 @@ class SubtitleJob extends ChangeNotifier {
         // 한국어 자막을 다시 붙여야 하면 번역 전에, 아니면 번역과 동시에 싱크를 맞춘다
         if (_onlineKorean != null) {
           await _autoSync();
+          _checkKoreanTiming();
         } else {
           unawaited(_autoSync());
         }
@@ -254,10 +260,15 @@ class SubtitleJob extends ChangeNotifier {
         ? ' · 번역 완료'
         : ' · 번역 $t/$n';
     final sync = syncInfo == null ? '' : ' · $syncInfo';
+    final speech = speechMatch == null
+        ? ''
+        : speechMatch! < 0
+        ? ' · 음성 대조 불가'
+        : ' · 음성 대조 ${(speechMatch! * 100).round()}% 일치';
     final w = settings.showVocab && sourceLang != 'ko'
         ? ' · 단어 ${cues.where((c) => c.words != null).length}/$n'
         : '';
-    return '자막 $n줄 ($originalFrom${_fromCache ? ' · 저장됨' : ''})$trans$w$sync';
+    return '자막 $n줄 ($originalFrom${_fromCache ? ' · 저장됨' : ''})$trans$w$sync$speech';
   }
 
   /// 내장 자막 또는 YouTube 자막. 찾으면 true.
@@ -333,6 +344,91 @@ class SubtitleJob extends ChangeNotifier {
 
   /// 원어 자막을 인터넷에서 가져왔는지
   bool _onlineOriginal = false;
+
+  // ---- 음성 대조 ----
+
+  /// 자막과 실제 음성의 일치율 (0~1). -1 = 말소리가 적어 판단 못 함, null = 안 함
+  double? speechMatch;
+
+  bool get _needsSpeechCheck =>
+      source is LocalFileSource &&
+      originalFrom != fromStt &&
+      speechMatch == null &&
+      cues.isNotEmpty &&
+      !_dbg('DUALCUE_NO_VERIFY');
+
+  /// 저장된/내장 자막 확인. 안 맞으면 자막을 버리고 음성 인식으로 넘어간다.
+  Future<bool> _checkSpeech() async {
+    if (await _speechMatches(cues)) {
+      await _saveCache();
+      return true;
+    }
+    _onlineOriginal = false;
+    _onlineKorean = null;
+    _fromCache = false;
+    _complete = false;
+    _covered.clear();
+    _release = null;
+    syncInfo = null;
+    _setCues(const []);
+    return false;
+  }
+
+  /// [c]가 실제 음성과 같은 내용이면 true (판단 못 하거나 확인이 실패해도 true).
+  /// 안 맞으면 [notice]를 남긴다.
+  Future<bool> _speechMatches(List<BilingualCue> c) async {
+    if (_dbg('DUALCUE_NO_VERIFY')) return true;
+    final path = (source as LocalFileSource).path;
+    try {
+      _set(JobStage.preparing, '자막이 음성과 맞는지 확인 중…');
+      final model = await ensureWhisperModel(
+        settings.whisperModel,
+        onProgress: (p) => _set(
+          JobStage.downloadingModel,
+          '음성 인식 모델 내려받는 중 (처음 한 번) ${(p * 100).toStringAsFixed(0)}%',
+          p,
+        ),
+      );
+      final r = await checkAgainstSpeech(
+        input: path,
+        cues: c,
+        duration: (await probe(path)).duration,
+        model: model,
+        vadModel: await ensureVadModel(),
+        language: sourceLang ?? 'auto',
+      );
+      debugPrint(
+        'speech check: ${r.describe()} (${r.matched}/${r.pairs}, ${r.samples}구간)',
+      );
+      if (r.matches) {
+        speechMatch = r.conclusive ? r.ratio : -1;
+        return true;
+      }
+      // 다른 작품/에피소드 자막
+      notice =
+          '받은 자막이 음성과 맞지 않아(${(r.ratio * 100).round()}% 일치) '
+          '음성 인식 자막을 사용합니다';
+      if (!_disposed) notifyListeners();
+      return false;
+    } on Exception catch (e) {
+      debugPrint('speech check failed: $e');
+      return true; // 확인 실패는 자막을 그대로 쓴다
+    }
+  }
+
+  /// 인터넷 한국어 자막이 원문 줄과 시간이 맞는지.
+  /// 절반 넘게 비어 있으면 다른 편집본 자막이라 버리고 Claude 번역을 쓴다.
+  void _checkKoreanTiming() {
+    // 음성 인식 원문은 줄을 다르게 나눠서 비교 기준이 못 된다
+    if (_onlineKorean == null || !_onlineOriginal || cues.isEmpty) return;
+    final r = koreanCoverage(cues);
+    debugPrint('korean timing: ${(r * 100).round()}% of lines covered');
+    if (r >= 0.5) return;
+    notice = '인터넷 한국어 자막이 음성과 맞지 않아(${(r * 100).round()}%) Claude로 번역합니다';
+    _onlineKorean = null;
+    _setCues([for (final c in cues) c.withTranslation(null)]);
+    unawaited(_saveCache());
+  }
 
   static const _fromNameSearch = 'OpenSubtitles · 이름 검색';
 
@@ -463,6 +559,11 @@ class SubtitleJob extends ChangeNotifier {
         notice = '인터넷 자막이 영상 길이와 맞지 않아 음성 인식을 사용합니다';
         _onlineKorean = koCues;
         if (!_disposed) notifyListeners();
+        return false;
+      }
+      // 실제 음성과 같은 내용인지
+      if (!await _speechMatches(c)) {
+        _onlineKorean = null; // 같은 검색에서 나온 한국어 자막도 믿을 수 없다
         return false;
       }
       _onlineOriginal = true;
