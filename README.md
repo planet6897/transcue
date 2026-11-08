@@ -9,7 +9,7 @@
 
 ## 개발 환경
 
-필요: Flutter 3.41+, Rust 1.93 (`rust-toolchain.toml`로 고정), Xcode(macOS) / Visual Studio 2022 C++ 워크로드(Windows)
+필요: Flutter 3.41+, yt-dlp(YouTube 재생: `brew install yt-dlp` / `winget install yt-dlp`), Rust 1.93 (`rust-toolchain.toml`로 고정), Xcode(macOS) / Visual Studio 2022 C++ 워크로드(Windows)
 
 ```bash
 # 앱 실행

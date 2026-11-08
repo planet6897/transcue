@@ -11,7 +11,7 @@
 | 2차 | iOS, Android (폰/태블릿) |
 
 핵심 기능
-1. 로컬 동영상 재생 (MP4, MKV, MOV, WebM 등 폭넓은 코덱)
+1. 로컬 동영상 재생 (MP4, MKV, MOV, WebM 등 폭넓은 코덱) + **YouTube URL 재생**
 2. 음성 → 원어 자막 생성 (STT)
 3. 원어 자막 → 한국어 번역 (Claude / OpenAI / Gemini 중 선택)
 4. 재생 중 **원문(위) + 번역(아래)** 이중 자막 오버레이
@@ -50,6 +50,7 @@
 | STT (로컬) | whisper.cpp + whisper-rs, 모델 `large-v3-turbo` / `small`(저사양) | MIT |
 | VAD | whisper.cpp 내장 Silero VAD | MIT |
 | 오디오 추출 | FFmpeg (LGPL 빌드, 사이드카 바이너리) | LGPL-2.1 |
+| YouTube | yt-dlp (사이드카 실행 파일, 자동 업데이트) | Unlicense |
 | 캐시/단어장 | SQLite (`rusqlite`) | MIT/Public Domain |
 | HTTP | `reqwest` + `tokio` | MIT/Apache |
 | API 키 저장 | `keyring` (macOS Keychain / Windows Credential Manager) | MIT/Apache |
@@ -78,6 +79,21 @@
 3. STT 결과를 **앞부분부터 스트리밍**으로 번역 → 재생하면서 뒤쪽이 채워짐
 4. 결과 SQLite 캐시 저장, 사용자가 SRT로 내보내기 가능
 
+### YouTube 재생 흐름
+1. URL에서 영상 ID 추출 → `yt-dlp -J`로 스트림/자막 정보 조회
+2. 1080p 이하 최고 화질 영상 스트림 + 별도 음성 스트림을 media_kit로 재생 (없으면 통합 포맷)
+3. YouTube가 제공하는 자막 활용 → **STT/번역 비용 0**
+   - 원어: 수동 자막 → 자동 생성(`<언어>-orig`) 순
+   - 한국어: 수동 한국어 자막 → YouTube 자동 번역(`ko`) 순. 설정에서 AI 번역으로 바꿀 수 있게 함(M3)
+   - 자동 자막의 롤링 중복 줄은 WebVTT 파서에서 제거
+4. 자막이 없으면 yt-dlp로 음성만 받아 STT 파이프라인으로 처리 (M2)
+
+YouTube 관련 주의
+- **이용약관:** YouTube 약관은 공식 플레이어 밖에서의 스트림 접근을 제한함. 비공개 개인 학습용으로 진행하고, 공개 배포·스토어 출시 전에 정책을 재검토 (모바일 스토어는 심사 거절 위험 → 공식 IFrame 플레이어 모드를 대안으로 검토)
+- **잦은 사이트 변경:** yt-dlp를 앱 지원 폴더에 두고 실행 시 `-U`로 자동 업데이트 (번들 안에 두면 서명이 깨짐)
+- 자동 자막에는 구두점이 거의 없음 → AI 번역 전에 문장 단위 재분할 필요 (M2 문장 분할 이슈와 연계)
+- 스트림 URL은 몇 시간 뒤 만료 → 오래 일시정지했다가 재개할 때 다시 조회
+
 번역 설계 메모
 - 기본 공급자: Claude (`claude-haiku-5-5` 저비용 / `claude-sonnet-5-5` 고품질). OpenAI·Gemini는 설정에서 선택.
 - 한 줄씩이 아닌 **20~40개 큐 단위 배치 + 직전 5개 큐 문맥**으로 번역해 자연스러움 확보.
@@ -90,8 +106,8 @@
 | # | 이름 | 내용 | 완료 기준 |
 |---|---|---|---|
 | M0 | 프로젝트 세팅 | 저장소, 앱/코어 골격, CI, 이슈 템플릿 | ✅ 이 커밋 |
-| M1 | 플레이어 MVP | 파일 열기/재생/탐색/속도, 외부 SRT 로드, 이중 자막 오버레이, Rust 코어 연결(frb) | SRT 2개(원문/번역)로 이중 자막 재생 |
-| M2 | 자막 생성 (STT) | FFmpeg 오디오 추출, whisper-rs, 모델 다운로드 관리, 문장 분할, 진행률, 캐시 | 30분 영상 자막 자동 생성 |
+| M1 | 플레이어 MVP | 파일 열기/재생/탐색/속도, **YouTube 재생 + YouTube 자막(원문/자동 번역)**, 외부 SRT 로드, 이중 자막 오버레이, Rust 코어 연결(frb) | SRT 2개(원문/번역)로 이중 자막 재생 |
+| M2 | 자막 생성 (STT) | FFmpeg 오디오 추출 (YouTube는 yt-dlp 음성), whisper-rs, 모델 다운로드 관리, 문장 분할, 진행률, 캐시 | 30분 영상 자막 자동 생성 |
 | M3 | 번역 | Claude/OpenAI/Gemini 공급자, 배치·문맥·재시도, API 키 Keychain 저장, 스트리밍 번역 | 생성 자막 한국어 번역 표시 |
 | M4 | 학습 UX | 문장 이동/반복, 자막 목록 패널, 번역 가리기, 단어 클릭 → 단어장, 단축키 | 학습 시나리오 사용성 테스트 |
 | M5 | 배포 | macOS 서명/공증(DMG), Windows MSIX/설치본, 자동 업데이트, burn-in 내보내기 | 정식 v1.0 릴리스 |
