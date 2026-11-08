@@ -155,6 +155,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Future<void> _openSettings() async {
+    final osBefore = _settings.osApiKey;
     final saved = await showDialog<bool>(
       context: context,
       builder: (_) => SettingsDialog(settings: _settings),
@@ -164,8 +165,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _toast('설정을 저장했습니다');
     // 키를 새로 넣었으면 지금 영상의 번역을 이어서 진행
     final job = _job;
-    if (job != null &&
-        (job.stage == JobStage.done || job.stage == JobStage.transcribing)) {
+    if (job == null) return;
+    final finished = job.stage == JobStage.done || job.stage == JobStage.failed;
+    // OpenSubtitles 키를 새로 넣었고 지금 자막이 음성 인식이면 인터넷 자막을 다시 찾는다
+    if (finished &&
+        _settings.osApiKey != osBefore &&
+        _settings.hasOpenSubtitles &&
+        job.originalFrom == SubtitleJob.fromStt) {
+      _startJob(job.source);
+    } else if (finished || job.stage == JobStage.transcribing) {
       unawaited(job.translateRemaining());
     }
   }

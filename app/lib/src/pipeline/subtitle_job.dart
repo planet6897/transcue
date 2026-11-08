@@ -59,6 +59,12 @@ class SubtitleJob extends ChangeNotifier {
 
   /// 원문 소스 설명 (예: "내장 자막", "음성 인식")
   String originalFrom = '';
+  static const fromStt = '음성 인식';
+
+  bool _fromCache = false;
+
+  /// 이 영상에 대해 OpenSubtitles 검색을 이미 했는지 (다운로드 한도 절약)
+  bool _osTried = false;
 
   /// 사용자에게 알릴 오류/안내 (번역 실패 등). 원문 자막은 계속 사용 가능.
   String? notice;
@@ -117,6 +123,7 @@ class SubtitleJob extends ChangeNotifier {
         'v': _cacheVersion,
         'lang': sourceLang,
         'from': originalFrom,
+        'osTried': _osTried,
         'cues': [for (final c in cues) c.toJson()],
       }),
     );
@@ -129,7 +136,9 @@ class SubtitleJob extends ChangeNotifier {
       final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
       if (j['v'] != _cacheVersion) return false; // 이전 버전 결과는 다시 만든다
       sourceLang = j['lang'] as String?;
-      originalFrom = '${j['from'] ?? '저장된 자막'} (저장됨)';
+      originalFrom = '${j['from'] ?? '저장된 자막'}';
+      _osTried = j['osTried'] == true;
+      _fromCache = true;
       _setCues([
         for (final c in (j['cues'] as List).cast<Map<String, dynamic>>())
           BilingualCue.fromJson(c),
@@ -147,6 +156,8 @@ class SubtitleJob extends ChangeNotifier {
       _set(JobStage.preparing, '자막 준비 중…');
       if (await _loadCache()) {
         _sttDone = true;
+        // 저장된 결과가 음성 인식이면 인터넷 자막을 먼저 찾아본다 (있으면 우선 사용)
+        if (_shouldTryOnlineOverCache) await _tryOnlineOverCache();
       } else if (!await _loadExistingSubtitles()) {
         await _speechToText();
         // 인터넷에서 한국어 자막만 찾은 경우: 음성 인식 결과에 시간 기준으로 붙인다
@@ -173,7 +184,7 @@ class SubtitleJob extends ChangeNotifier {
         : t == n
         ? ' · 번역 완료'
         : ' · 번역 $t/$n';
-    return '자막 $n줄 ($originalFrom)$trans';
+    return '자막 $n줄 ($originalFrom${_fromCache ? ' · 저장됨' : ''})$trans';
   }
 
   /// 내장 자막 또는 YouTube 자막. 찾으면 true.
@@ -222,6 +233,23 @@ class SubtitleJob extends ChangeNotifier {
     }
   }
 
+  bool get _shouldTryOnlineOverCache =>
+      source is LocalFileSource &&
+      settings.hasOpenSubtitles &&
+      !_osTried &&
+      originalFrom == fromStt;
+
+  Future<void> _tryOnlineOverCache() async {
+    final path = (source as LocalFileSource).path;
+    final stt = cues;
+    if (await _loadOnlineSubtitles(path, await probe(path))) {
+      _fromCache = false; // 인터넷 자막으로 교체됨
+    } else if (_onlineKorean case final ko?) {
+      // 한국어 자막만 있으면 저장된 음성 인식 원문에 붙인다
+      _setCues(mergeTranslation(stt, ko));
+    }
+  }
+
   /// 인터넷에서 찾은 한국어 자막 (원어 자막은 못 찾았을 때 STT 결과에 병합)
   List<BilingualCue>? _onlineKorean;
 
@@ -247,6 +275,7 @@ class SubtitleJob extends ChangeNotifier {
         name: name,
         languages: lang == 'ko' ? 'ko' : '$lang,ko',
       );
+      _osTried = true; // 검색이 성공했을 때만 기록 (키 오류면 다음에 다시 시도)
       final origHit = pickBest(hits, lang);
       final koHit = lang == 'ko' ? null : pickBest(hits, 'ko');
       debugPrint(
@@ -275,7 +304,7 @@ class SubtitleJob extends ChangeNotifier {
       return true;
     } on Exception catch (e) {
       debugPrint('OpenSubtitles failed: $e');
-      notice = '인터넷 자막을 가져오지 못해 음성 인식으로 진행합니다 ($e)';
+      notice = '인터넷 자막을 가져오지 못했습니다 ($e)';
       if (!_disposed) notifyListeners();
       return false;
     }
@@ -320,7 +349,7 @@ class SubtitleJob extends ChangeNotifier {
         ),
       );
 
-      originalFrom = '음성 인식';
+      originalFrom = fromStt;
       _set(JobStage.transcribing, '음성 인식 중…', 0);
       final found = <BilingualCue>[];
       await for (final ev in transcribe(
