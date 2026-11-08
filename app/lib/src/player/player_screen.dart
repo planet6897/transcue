@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -44,7 +46,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void initState() {
     super.initState();
-    AppSettings.load().then((s) => setState(() => _settings = s));
+    AppSettings.load().then((s) {
+      setState(() => _settings = s);
+      // 개발용: DUALCUE_OPEN=<파일 경로> 로 실행하면 바로 연다 (실기기 자동 검증용)
+      final auto = kDebugMode ? Platform.environment['DUALCUE_OPEN'] : null;
+      if (auto != null && auto.isNotEmpty) unawaited(_openPath(auto));
+    });
     _posSub = _player.stream.position.listen((pos) {
       _pos = pos;
       _updateCurrent();
@@ -75,8 +82,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _startJob(JobSource source) {
     _job?.dispose();
     final job = SubtitleJob(source: source, settings: _settings);
+    var lastLog = '';
     job.addListener(() {
       if (!mounted || _job != job) return;
+      if (kDebugMode) {
+        final t = job.cues.where((c) => c.translation != null).length;
+        final log =
+            '[job] ${job.stage.name} | ${job.status} | cues=${job.cues.length} ko=$t'
+            '${job.notice == null ? '' : ' | ${job.notice}'}';
+        // 진행률 숫자만 바뀌는 로그는 10% 단위로만 남긴다
+        final key = log
+            .replaceAllMapped(RegExp(r'(\d)\d%'), (m) => '${m[1]}x%')
+            .replaceAll(RegExp(r'cues=\d+'), '');
+        if (key != lastLog) {
+          lastLog = key;
+          debugPrint(log);
+        }
+      }
       _updateCurrent();
       setState(() {}); // 상태 표시줄 갱신
     });
@@ -94,9 +116,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
     final file = await openFile(acceptedTypeGroups: [videos]);
     if (file == null) return;
-    setState(() => _title = file.name);
-    await _player.open(Media(file.path));
-    _startJob(LocalFileSource(file.path));
+    await _openPath(file.path);
+  }
+
+  Future<void> _openPath(String path) async {
+    setState(() => _title = path.split(Platform.pathSeparator).last);
+    await _player.open(Media(path));
+    _startJob(LocalFileSource(path));
   }
 
   Future<void> _openYoutube() async {
