@@ -15,6 +15,8 @@ import '../settings/settings_dialog.dart';
 import '../source/youtube_url.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
+import '../pipeline/tools.dart';
+import 'file_browser.dart';
 import 'playlist.dart';
 import 'resume.dart';
 
@@ -139,6 +141,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       source: source,
       settings: _settings,
       playhead: () => _player.state.position,
+      mediaDuration: () => _player.state.duration,
     );
     var lastLog = '';
     job.addListener(() {
@@ -166,6 +169,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Future<void> _openFile() async {
+    if (Platform.isAndroid) {
+      final cur = _currentPath;
+      final path = await pickVideoOnAndroid(
+        context,
+        startDir: cur?.substring(0, cur.lastIndexOf('/')),
+      );
+      if (path != null) await _openPath(path);
+      return;
+    }
     const videos = XTypeGroup(
       label: 'Video',
       extensions: ['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v'],
@@ -522,11 +534,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       ),
                       onPressed: _toggleAutoPlayNext,
                     ),
-                    IconButton(
-                      tooltip: 'YouTube 열기',
-                      icon: const Icon(Icons.smart_display),
-                      onPressed: _loading ? null : _openYoutube,
-                    ),
+                    // YouTube는 yt-dlp가 필요해 데스크톱만
+                    if (hasDesktopTools)
+                      IconButton(
+                        tooltip: 'YouTube 열기',
+                        icon: const Icon(Icons.smart_display),
+                        onPressed: _loading ? null : _openYoutube,
+                      ),
                     IconButton(
                       tooltip: '동영상 열기',
                       icon: const Icon(Icons.folder_open),

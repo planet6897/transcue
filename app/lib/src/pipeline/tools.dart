@@ -10,6 +10,12 @@ class ToolNotFound implements Exception {
 
 final _cache = <String, String>{};
 
+/// ffmpeg·whisper·yt-dlp 같은 외부 프로그램을 쓸 수 있는 환경인지 (데스크톱).
+/// 모바일(Android)에서는 재생·인터넷 자막·번역만 되고, 음성 인식·싱크·음성 대조는 건너뛴다.
+/// TODO(M6): whisper.cpp를 앱에 내장해 모바일에서도 음성 인식
+final bool hasDesktopTools =
+    Platform.isMacOS || Platform.isWindows || Platform.isLinux;
+
 /// 외부 실행 파일(ffmpeg, ffprobe, whisper-cli, yt-dlp)을 찾는다.
 /// macOS GUI 앱은 셸 PATH를 물려받지 않으므로 Homebrew 경로를 먼저 본다.
 ///

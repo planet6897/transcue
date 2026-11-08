@@ -14,6 +14,7 @@ import '../translate/claude_translator.dart';
 import 'media_tools.dart';
 import 'speech_check.dart';
 import 'subsync.dart';
+import 'tools.dart';
 import 'whisper.dart';
 
 /// 자막을 어디서 가져올지
@@ -52,7 +53,23 @@ class SubtitleJob extends ChangeNotifier {
     required this.source,
     required this.settings,
     Duration Function()? playhead,
-  }) : playhead = playhead ?? (() => Duration.zero);
+    Duration Function()? mediaDuration,
+  }) : playhead = playhead ?? (() => Duration.zero),
+       mediaDuration = mediaDuration ?? (() => Duration.zero);
+
+  /// 플레이어가 알려 준 영상 길이 (ffprobe가 없는 모바일용)
+  final Duration Function() mediaDuration;
+
+  /// 영상 정보. 모바일은 ffprobe가 없어 플레이어의 길이만 쓴다 (내장 자막 없음).
+  Future<MediaInfo> _probe(String path) async {
+    if (hasDesktopTools) return probe(path);
+    var d = mediaDuration();
+    for (var i = 0; i < 100 && d <= Duration.zero; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      d = mediaDuration();
+    }
+    return MediaInfo(duration: d, subtitles: const []);
+  }
 
   final JobSource source;
   final AppSettings settings;
@@ -209,7 +226,7 @@ class SubtitleJob extends ChangeNotifier {
       ];
       if (source case LocalFileSource(:final path) when _complete) {
         // 예전에 잘못 받은 인터넷 자막 등: 영상 길이와 안 맞으면 버리고 다시 만든다
-        if (!fitsDuration(saved, (await probe(path)).duration)) {
+        if (!fitsDuration(saved, (await _probe(path)).duration)) {
           debugPrint('cache rejected: subtitles do not fit the video length');
           return false;
         }
@@ -291,7 +308,7 @@ class SubtitleJob extends ChangeNotifier {
   Future<bool> _loadExistingSubtitles() async {
     switch (source) {
       case LocalFileSource(:final path):
-        final info = await probe(path);
+        final info = await _probe(path);
         final orig = info.originalTrack;
         if (orig != null) {
           var c = await extractEmbeddedSubtitle(path, orig);
@@ -343,7 +360,7 @@ class SubtitleJob extends ChangeNotifier {
   Future<bool> _tryOnlineOverCache() async {
     final path = (source as LocalFileSource).path;
     final stt = cues;
-    if (await _loadOnlineSubtitles(path, await probe(path))) {
+    if (await _loadOnlineSubtitles(path, await _probe(path))) {
       _fromCache = false; // 인터넷 자막으로 교체됨
       _covered.clear();
       return true;
@@ -393,7 +410,7 @@ class SubtitleJob extends ChangeNotifier {
   /// [c]가 실제 음성과 같은 내용이면 true (판단 못 하거나 확인이 실패해도 true).
   /// 안 맞으면 [notice]를 남긴다.
   Future<bool> _speechMatches(List<BilingualCue> c) async {
-    if (_dbg('DUALCUE_NO_VERIFY')) return true;
+    if (_dbg('DUALCUE_NO_VERIFY') || !hasDesktopTools) return true;
     final path = (source as LocalFileSource).path;
     try {
       _set(JobStage.preparing, '자막이 음성과 맞는지 확인 중…');
@@ -408,7 +425,7 @@ class SubtitleJob extends ChangeNotifier {
       final r = await checkAgainstSpeech(
         input: path,
         cues: c,
-        duration: (await probe(path)).duration,
+        duration: (await _probe(path)).duration,
         model: model,
         vadModel: await ensureVadModel(),
         language: sourceLang ?? 'auto',
@@ -461,6 +478,7 @@ class SubtitleJob extends ChangeNotifier {
 
   /// 인터넷 자막의 시간을 음성 구간에 맞춘다. 실패해도 자막은 그대로 쓴다.
   Future<void> _autoSync() async {
+    if (!hasDesktopTools) return; // ffmpeg 없음 (모바일)
     final path = (source as LocalFileSource).path;
     final tmp = await Directory.systemTemp.createTemp('dualcue_sync_');
     try {
@@ -667,6 +685,11 @@ class SubtitleJob extends ChangeNotifier {
   }
 
   Future<void> _speechToText() async {
+    if (!hasDesktopTools) {
+      originalFrom = '자막 없음';
+      notice = '이 기기에서는 아직 음성 인식을 지원하지 않습니다 (인터넷 자막만 사용)';
+      return;
+    }
     final model = await ensureWhisperModel(
       settings.whisperModel,
       onProgress: (p) => _set(
@@ -681,7 +704,7 @@ class SubtitleJob extends ChangeNotifier {
       LocalFileSource(:final path) => (
         path,
         const <String, String>{},
-        (await probe(path)).duration,
+        (await _probe(path)).duration,
       ),
       YoutubeSource(:final media) => (
         media.audioUrl ?? media.videoUrl,
