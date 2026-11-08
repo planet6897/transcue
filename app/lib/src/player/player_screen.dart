@@ -464,19 +464,46 @@ class _PlayerScreenState extends State<PlayerScreen> {
     keyboardShortcuts: _shortcuts,
   );
 
-  /// 터치 기기(태블릿·휴대폰): 아래 슬라이드 바로 이동, 두 번 탭으로 ±10초,
-  /// 가로로 밀어서 이동. 화면을 한 번 탭하면 조작 버튼이 나타난다.
-  static const _touchTheme = MaterialVideoControlsThemeData(
+  /// 터치 기기(태블릿·휴대폰): YouTube처럼
+  /// - 화면을 한 번 탭 → 화면이 어두워지며 조작 버튼 표시 (4초 뒤 숨김)
+  /// - 가운데: ⏪10초 · 재생/일시정지 · 10초⏩
+  /// - 아래: 시간 / 슬라이드 바 / 전체 화면
+  /// - 왼쪽·오른쪽 두 번 탭: ±10초, 가로로 밀기: 이동
+  late final _touchTheme = MaterialVideoControlsThemeData(
+    backdropColor: const Color(0x80000000),
     seekOnDoubleTap: true,
     seekGesture: true,
     displaySeekBar: true,
-    seekBarHeight: 4,
-    seekBarContainerHeight: 48, // 손가락으로 잡기 쉽게
-    seekBarThumbSize: 18,
-    seekBarPositionColor: Color(0xFF80DEEA),
-    seekBarThumbColor: Color(0xFF80DEEA),
+    controlsHoverDuration: const Duration(seconds: 4),
+    primaryButtonBar: [
+      const Spacer(flex: 2),
+      MaterialCustomButton(
+        icon: const Icon(Icons.replay_10),
+        iconSize: 44,
+        onPressed: () => _seekBy(const Duration(seconds: -10)),
+      ),
+      const Spacer(),
+      const MaterialPlayOrPauseButton(iconSize: 72),
+      const Spacer(),
+      MaterialCustomButton(
+        icon: const Icon(Icons.forward_10),
+        iconSize: 44,
+        onPressed: () => _seekBy(const Duration(seconds: 10)),
+      ),
+      const Spacer(flex: 2),
+    ],
+    bottomButtonBar: const [
+      MaterialPositionIndicator(),
+      Spacer(),
+      MaterialFullscreenButton(),
+    ],
     buttonBarButtonSize: 28,
-    controlsHoverDuration: Duration(seconds: 4),
+    seekBarMargin: const EdgeInsets.symmetric(horizontal: 16),
+    seekBarHeight: 4,
+    seekBarContainerHeight: 40, // 손가락으로 잡기 쉽게
+    seekBarThumbSize: 16,
+    seekBarPositionColor: const Color(0xFF80DEEA),
+    seekBarThumbColor: const Color(0xFF80DEEA),
   );
 
   static final bool _touch = Platform.isAndroid || Platform.isIOS;
@@ -580,40 +607,44 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ],
             bottom: job == null ? null : _JobStatusBar(job: job),
           ),
-          body: Stack(
-            children: [
-              // media_kit 내장 자막 렌더링은 끄고 자체 오버레이를 사용한다.
-              MaterialVideoControlsTheme(
-                normal: _touchTheme,
-                fullscreen: _touchTheme,
-                child: MaterialDesktopVideoControlsTheme(
-                  normal: _controlsTheme,
-                  fullscreen: _controlsTheme,
-                  child: Video(
-                    key: _videoKey,
-                    controller: _controller,
-                    subtitleViewConfiguration: const SubtitleViewConfiguration(
-                      visible: false,
-                    ),
-                    // controls 빌더는 전체 화면에서도 다시 쓰이므로 자막을 여기에 넣는다
-                    controls: (state) => Stack(
-                      children: [
-                        LiveDualSubtitle(
-                          position: _player.stream.position,
-                          currentPosition: () => _player.state.position,
-                          view: _view,
-                        ),
-                        if (_touch)
-                          MaterialVideoControls(state)
-                        else
-                          MaterialDesktopVideoControls(state),
-                      ],
+          // Android 15+는 화면 끝까지 그리므로 아래 작업 표시줄·내비게이션 바를 피한다
+          // (안 피하면 슬라이드 바·시간·자막 아래쪽이 작업 표시줄에 가려짐)
+          body: SafeArea(
+            top: false,
+            child: Stack(
+              children: [
+                // media_kit 내장 자막 렌더링은 끄고 자체 오버레이를 사용한다.
+                MaterialVideoControlsTheme(
+                  normal: _touchTheme,
+                  fullscreen: _touchTheme,
+                  child: MaterialDesktopVideoControlsTheme(
+                    normal: _controlsTheme,
+                    fullscreen: _controlsTheme,
+                    child: Video(
+                      key: _videoKey,
+                      controller: _controller,
+                      subtitleViewConfiguration:
+                          const SubtitleViewConfiguration(visible: false),
+                      // controls 빌더는 전체 화면에서도 다시 쓰이므로 자막을 여기에 넣는다
+                      controls: (state) => Stack(
+                        children: [
+                          LiveDualSubtitle(
+                            position: _player.stream.position,
+                            currentPosition: () => _player.state.position,
+                            view: _view,
+                          ),
+                          if (_touch)
+                            MaterialVideoControls(state)
+                          else
+                            MaterialDesktopVideoControls(state),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-              if (_loading) const Center(child: CircularProgressIndicator()),
-            ],
+                if (_loading) const Center(child: CircularProgressIndicator()),
+              ],
+            ),
           ),
         ),
       ),
