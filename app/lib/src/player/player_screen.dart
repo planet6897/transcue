@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
@@ -12,7 +13,6 @@ import '../settings/app_settings.dart';
 import '../settings/settings_dialog.dart';
 import '../source/youtube_url.dart';
 import '../source/yt_dlp.dart';
-import '../subtitle/bilingual_cue.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
 
 /// 플레이어 화면: 로컬 파일 / YouTube 재생 + 이중 자막 오버레이.
@@ -30,18 +30,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late final Player _player = Player();
   late final VideoController _controller = VideoController(_player);
   late final YtDlp _ytDlp = widget._ytDlp ?? YtDlp();
-  StreamSubscription<Duration>? _posSub;
+  final _view = DualSubtitleState();
+  final _videoKey = GlobalKey<VideoState>();
 
   AppSettings _settings = AppSettings();
   SubtitleJob? _job;
-  BilingualCue? _current;
-  Duration _pos = Duration.zero;
   String _title = 'DualCue';
   bool _loading = false;
-  bool _showOriginal = true;
-  bool _showTranslation = true;
-
-  List<BilingualCue> get _cues => _job?.cues ?? const [];
 
   @override
   void initState() {
@@ -52,22 +47,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
       final auto = kDebugMode ? Platform.environment['DUALCUE_OPEN'] : null;
       if (auto != null && auto.isNotEmpty) unawaited(_openPath(auto));
     });
-    _posSub = _player.stream.position.listen((pos) {
-      _pos = pos;
-      _updateCurrent();
-    });
-  }
-
-  void _updateCurrent() {
-    final next = cueAt(_cues, _pos);
-    // 번역이 채워지면 같은 시간대라도 다른 객체가 되므로 identical로 비교
-    if (!identical(next, _current)) setState(() => _current = next);
   }
 
   @override
   void dispose() {
-    _posSub?.cancel();
     _job?.dispose();
+    _view.dispose();
     _player.dispose();
     super.dispose();
   }
@@ -99,13 +84,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
           debugPrint(log);
         }
       }
-      _updateCurrent();
+      _view.cues = job.cues;
       setState(() {}); // 상태 표시줄 갱신
     });
-    setState(() {
-      _job = job;
-      _current = null;
-    });
+    _view.cues = const [];
+    setState(() => _job = job);
     unawaited(job.run());
   }
 
@@ -123,6 +106,21 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() => _title = path.split(Platform.pathSeparator).last);
     await _player.open(Media(path));
     _startJob(LocalFileSource(path));
+    if (kDebugMode) unawaited(_debugAutoplay());
+  }
+
+  /// 개발용: DUALCUE_SEEK=<초>, DUALCUE_FULLSCREEN=1 (실기기 화면 검증용)
+  Future<void> _debugAutoplay() async {
+    final env = Platform.environment;
+    final seek = int.tryParse(env['DUALCUE_SEEK'] ?? '');
+    if (seek != null) {
+      await _player.stream.duration.firstWhere((d) => d > Duration.zero);
+      await _player.seek(Duration(seconds: seek));
+    }
+    if (env['DUALCUE_FULLSCREEN'] == '1') {
+      await Future<void>.delayed(const Duration(seconds: 1));
+      await _videoKey.currentState?.enterFullscreen();
+    }
   }
 
   Future<void> _openYoutube() async {
@@ -178,63 +176,134 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
+  /// 재생 단축키. 영상에 포커스가 있을 때(일반/전체 화면)와 화면 전체에서 같이 쓴다.
+  late final Map<ShortcutActivator, VoidCallback> _shortcuts = {
+    for (final k in [
+      LogicalKeyboardKey.space,
+      LogicalKeyboardKey.enter,
+      LogicalKeyboardKey.numpadEnter,
+      LogicalKeyboardKey.mediaPlayPause,
+    ])
+      SingleActivator(k): _player.playOrPause,
+    const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
+        _seekBy(const Duration(seconds: -5)),
+    const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+        _seekBy(const Duration(seconds: 5)),
+    const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
+        _player.setVolume((_player.state.volume + 5).clamp(0, 100)),
+    const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
+        _player.setVolume((_player.state.volume - 5).clamp(0, 100)),
+    const SingleActivator(LogicalKeyboardKey.keyF): () =>
+        _videoKey.currentState?.toggleFullscreen(),
+    const SingleActivator(LogicalKeyboardKey.escape): () {
+      final v = _videoKey.currentState;
+      if (v != null && v.isFullscreen()) v.exitFullscreen();
+    },
+  };
+
+  void _seekBy(Duration d) {
+    final p = _player.state.position + d;
+    _player.seek(p < Duration.zero ? Duration.zero : p);
+  }
+
+  /// 화면 클릭 = 재생/일시정지 (더블 클릭은 전체 화면)
+  late final _controlsTheme = MaterialDesktopVideoControlsThemeData(
+    playAndPauseOnTap: true,
+    keyboardShortcuts: _shortcuts,
+  );
+
   @override
   Widget build(BuildContext context) {
     final job = _job;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_title, overflow: TextOverflow.ellipsis),
-        actions: [
-          IconButton(
-            tooltip: '원문 자막',
-            icon: Icon(_showOriginal ? Icons.subtitles : Icons.subtitles_off),
-            onPressed: () => setState(() => _showOriginal = !_showOriginal),
+    // 툴바 버튼 등 영상 밖에 포커스가 있어도 Space/Enter로 재생/일시정지
+    return CallbackShortcuts(
+      bindings: _shortcuts,
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          appBar: AppBar(
+            title: Text(_title, overflow: TextOverflow.ellipsis),
+            actions: [
+              // 툴바 버튼이 포커스를 가져가면 Space/Enter가 버튼을 누르게 되므로 제외
+              ExcludeFocus(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: '원문 자막',
+                      icon: Icon(
+                        _view.showOriginal
+                            ? Icons.subtitles
+                            : Icons.subtitles_off,
+                      ),
+                      onPressed: () => setState(
+                        () => _view.showOriginal = !_view.showOriginal,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '번역 자막',
+                      icon: Icon(
+                        _view.showTranslation
+                            ? Icons.translate
+                            : Icons.g_translate_outlined,
+                      ),
+                      onPressed: () => setState(
+                        () => _view.showTranslation = !_view.showTranslation,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'YouTube 열기',
+                      icon: const Icon(Icons.smart_display),
+                      onPressed: _loading ? null : _openYoutube,
+                    ),
+                    IconButton(
+                      tooltip: '동영상 열기',
+                      icon: const Icon(Icons.folder_open),
+                      onPressed: _loading ? null : _openFile,
+                    ),
+                    IconButton(
+                      tooltip: '설정 (Claude API 키)',
+                      icon: Icon(
+                        Icons.settings,
+                        color: _settings.hasClaudeKey ? null : Colors.amber,
+                      ),
+                      onPressed: _openSettings,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            bottom: job == null ? null : _JobStatusBar(job: job),
           ),
-          IconButton(
-            tooltip: '번역 자막',
-            icon: Icon(
-              _showTranslation ? Icons.translate : Icons.g_translate_outlined,
-            ),
-            onPressed: () =>
-                setState(() => _showTranslation = !_showTranslation),
+          body: Stack(
+            children: [
+              // media_kit 내장 자막 렌더링은 끄고 자체 오버레이를 사용한다.
+              MaterialDesktopVideoControlsTheme(
+                normal: _controlsTheme,
+                fullscreen: _controlsTheme,
+                child: Video(
+                  key: _videoKey,
+                  controller: _controller,
+                  subtitleViewConfiguration: const SubtitleViewConfiguration(
+                    visible: false,
+                  ),
+                  // controls 빌더는 전체 화면에서도 다시 쓰이므로 자막을 여기에 넣는다
+                  controls: (state) => Stack(
+                    children: [
+                      LiveDualSubtitle(
+                        position: _player.stream.position,
+                        currentPosition: () => _player.state.position,
+                        view: _view,
+                      ),
+                      MaterialDesktopVideoControls(state),
+                    ],
+                  ),
+                ),
+              ),
+              if (_loading) const Center(child: CircularProgressIndicator()),
+            ],
           ),
-          IconButton(
-            tooltip: 'YouTube 열기',
-            icon: const Icon(Icons.smart_display),
-            onPressed: _loading ? null : _openYoutube,
-          ),
-          IconButton(
-            tooltip: '동영상 열기',
-            icon: const Icon(Icons.folder_open),
-            onPressed: _loading ? null : _openFile,
-          ),
-          IconButton(
-            tooltip: '설정 (Claude API 키)',
-            icon: Icon(
-              Icons.settings,
-              color: _settings.hasClaudeKey ? null : Colors.amber,
-            ),
-            onPressed: _openSettings,
-          ),
-        ],
-        bottom: job == null ? null : _JobStatusBar(job: job),
-      ),
-      body: Stack(
-        children: [
-          // media_kit 내장 자막 렌더링은 끄고 자체 오버레이를 사용한다.
-          Video(
-            controller: _controller,
-            subtitleViewConfiguration: const SubtitleViewConfiguration(
-              visible: false,
-            ),
-          ),
-          DualSubtitleOverlay(
-            cue: _current,
-            showOriginal: _showOriginal,
-            showTranslation: _showTranslation,
-          ),
-          if (_loading) const Center(child: CircularProgressIndicator()),
-        ],
+        ),
       ),
     );
   }
