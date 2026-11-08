@@ -289,7 +289,7 @@ class YtDlp {
     YoutubeMedia media,
     CaptionTrack track,
   ) async {
-    final dir = await Directory.systemTemp.createTemp('dualcue_sub_');
+    final dir = await Directory.systemTemp.createTemp('transcue_sub_');
     try {
       await _run([
         '--skip-download',

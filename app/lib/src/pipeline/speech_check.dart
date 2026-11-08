@@ -92,7 +92,7 @@ Future<SpeechCheck> checkAgainstSpeech({
   String language = 'auto',
   void Function(int sample)? onSample,
 }) async {
-  final tmp = await Directory.systemTemp.createTemp('dualcue_check_');
+  final tmp = await Directory.systemTemp.createTemp('transcue_check_');
   var matched = 0, pairs = 0, samples = 0;
   try {
     var tried = 0;

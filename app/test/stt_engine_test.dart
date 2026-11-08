@@ -1,5 +1,5 @@
-import 'package:dualcue/src/pipeline/stt_engine.dart';
-import 'package:dualcue/src/pipeline/whisper.dart';
+import 'package:transcue/src/pipeline/stt_engine.dart';
+import 'package:transcue/src/pipeline/whisper.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

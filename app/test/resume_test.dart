@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:dualcue/src/player/resume.dart';
+import 'package:transcue/src/player/resume.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

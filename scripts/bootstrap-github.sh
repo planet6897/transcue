@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # GitHub 저장소 생성 + 라벨/마일스톤/초기 이슈 등록 (최초 1회 실행)
 set -euo pipefail
-REPO="${REPO:-planet6897/dualcue}"
+REPO="${REPO:-planet6897/transcue}"
 VISIBILITY="${VISIBILITY:---private}"   # 공개하려면 VISIBILITY=--public
 
 cd "$(dirname "$0")/.."

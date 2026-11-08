@@ -1,7 +1,7 @@
 import 'dart:math';
 
-import 'package:dualcue/src/pipeline/subsync.dart';
-import 'package:dualcue/src/subtitle/bilingual_cue.dart';
+import 'package:transcue/src/pipeline/subsync.dart';
+import 'package:transcue/src/subtitle/bilingual_cue.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

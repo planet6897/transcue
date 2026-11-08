@@ -122,7 +122,7 @@ YouTube 관련 주의
 ```
 .
 ├── app/            # Flutter 앱 (macOS, Windows → 이후 iOS, Android)
-├── core/           # Rust 코어 라이브러리 (dualcue_core)
+├── core/           # Rust 코어 라이브러리 (transcue_core)
 ├── docs/           # 계획/설계 문서
 └── .github/        # CI, 이슈/PR 템플릿
 ```

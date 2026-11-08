@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:dualcue/src/online/opensubtitles.dart';
+import 'package:transcue/src/online/opensubtitles.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

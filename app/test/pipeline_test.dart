@@ -1,7 +1,7 @@
-import 'package:dualcue/src/pipeline/media_tools.dart';
-import 'package:dualcue/src/pipeline/whisper.dart';
-import 'package:dualcue/src/settings/app_settings.dart';
-import 'package:dualcue/src/translate/claude_translator.dart';
+import 'package:transcue/src/pipeline/media_tools.dart';
+import 'package:transcue/src/pipeline/whisper.dart';
+import 'package:transcue/src/settings/app_settings.dart';
+import 'package:transcue/src/translate/claude_translator.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

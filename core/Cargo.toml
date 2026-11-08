@@ -1,8 +1,8 @@
 [package]
-name = "dualcue_core"
+name = "transcue_core"
 version = "0.1.0"
 edition = "2024"
-description = "DualCue core: subtitle model, STT/translation pipeline"
+description = "Transcue core: subtitle model, STT/translation pipeline"
 license = "MIT"
 
 [lib]

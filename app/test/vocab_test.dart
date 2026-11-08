@@ -1,9 +1,9 @@
 import 'dart:convert';
 
-import 'package:dualcue/src/settings/app_settings.dart';
-import 'package:dualcue/src/subtitle/bilingual_cue.dart';
-import 'package:dualcue/src/subtitle/dual_subtitle_overlay.dart';
-import 'package:dualcue/src/translate/claude_translator.dart';
+import 'package:transcue/src/settings/app_settings.dart';
+import 'package:transcue/src/subtitle/bilingual_cue.dart';
+import 'package:transcue/src/subtitle/dual_subtitle_overlay.dart';
+import 'package:transcue/src/translate/claude_translator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

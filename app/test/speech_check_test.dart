@@ -1,5 +1,5 @@
-import 'package:dualcue/src/pipeline/speech_check.dart';
-import 'package:dualcue/src/subtitle/bilingual_cue.dart';
+import 'package:transcue/src/pipeline/speech_check.dart';
+import 'package:transcue/src/subtitle/bilingual_cue.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 BilingualCue cue(int s, String o, {String? t}) => BilingualCue(

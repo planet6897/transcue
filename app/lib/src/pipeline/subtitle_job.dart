@@ -486,7 +486,7 @@ class SubtitleJob extends ChangeNotifier {
   Future<void> _autoSync() async {
     if (!hasDesktopTools) return; // ffmpeg 없음 (모바일)
     final path = (source as LocalFileSource).path;
-    final tmp = await Directory.systemTemp.createTemp('dualcue_sync_');
+    final tmp = await Directory.systemTemp.createTemp('transcue_sync_');
     try {
       if (stage != JobStage.translating) {
         _set(JobStage.preparing, '자막 싱크 확인 중 (음성 구간 분석)…');
@@ -724,7 +724,7 @@ class SubtitleJob extends ChangeNotifier {
         : const Duration(hours: 6).inMilliseconds;
 
     originalFrom = fromStt;
-    final tmp = await Directory.systemTemp.createTemp('dualcue_');
+    final tmp = await Directory.systemTemp.createTemp('transcue_');
     try {
       int? lastEnd;
       _set(

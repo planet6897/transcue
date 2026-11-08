@@ -1,4 +1,4 @@
-# dualcue
+# Transcue (Flutter 앱)
 
 A new Flutter project.
 

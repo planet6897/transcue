@@ -1,4 +1,4 @@
-import 'package:dualcue/src/subtitle/bilingual_cue.dart';
+import 'package:transcue/src/subtitle/bilingual_cue.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

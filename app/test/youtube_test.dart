@@ -1,5 +1,5 @@
-import 'package:dualcue/src/source/youtube_url.dart';
-import 'package:dualcue/src/source/yt_dlp.dart';
+import 'package:transcue/src/source/youtube_url.dart';
+import 'package:transcue/src/source/yt_dlp.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
