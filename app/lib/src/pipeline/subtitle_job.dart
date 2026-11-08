@@ -13,6 +13,7 @@ import '../subtitle/webvtt.dart';
 import '../translate/claude_translator.dart';
 import 'media_tools.dart';
 import 'speech_check.dart';
+import 'stt_engine.dart';
 import 'subsync.dart';
 import 'tools.dart';
 import 'whisper.dart';
@@ -410,7 +411,7 @@ class SubtitleJob extends ChangeNotifier {
   /// [c]가 실제 음성과 같은 내용이면 true (판단 못 하거나 확인이 실패해도 true).
   /// 안 맞으면 [notice]를 남긴다.
   Future<bool> _speechMatches(List<BilingualCue> c) async {
-    if (_dbg('DUALCUE_NO_VERIFY') || !hasDesktopTools) return true;
+    if (_dbg('DUALCUE_NO_VERIFY') || !canTranscribe) return true;
     final path = (source as LocalFileSource).path;
     try {
       _set(JobStage.preparing, '자막이 음성과 맞는지 확인 중…');
@@ -685,7 +686,7 @@ class SubtitleJob extends ChangeNotifier {
   }
 
   Future<void> _speechToText() async {
-    if (!hasDesktopTools) {
+    if (!canTranscribe) {
       originalFrom = '자막 없음';
       notice = '이 기기에서는 아직 음성 인식을 지원하지 않습니다 (인터넷 자막만 사용)';
       return;
@@ -746,27 +747,21 @@ class SubtitleJob extends ChangeNotifier {
           '[stt] chunk ${start ~/ 1000}s → ${hardEnd ~/ 1000}s '
           '(playhead ${playhead().inSeconds}s)',
         );
-        final wav = '${tmp.path}/chunk.wav';
-        await extractAudio(
-          input,
-          wav,
+        var lastCueEnd = hardEnd;
+        var ended = false;
+        await for (final ev in transcribeRange(
+          input: input,
           httpHeaders: headers,
           start: Duration(milliseconds: start),
           length: Duration(milliseconds: readEnd - start),
-        );
-        if (await File(wav).length() < 32000) {
-          _addCovered(start, total); // 소리가 끝남 (길이를 모를 때)
-          break;
-        }
-
-        var lastCueEnd = hardEnd;
-        await for (final ev in transcribe(
-          wavPath: wav,
           model: model,
           vadModel: vad,
           language: sourceLang ?? 'auto',
+          tmp: tmp,
         )) {
           switch (ev) {
+            case SttEnd():
+              ended = true;
             case SttCue(:final cue):
               final c = shiftCues([cue], Duration(milliseconds: start)).first;
               final s = c.start.inMilliseconds;
@@ -781,6 +776,10 @@ class SubtitleJob extends ChangeNotifier {
             case SttLanguage(:final code):
               sourceLang ??= code;
           }
+        }
+        if (ended) {
+          _addCovered(start, total); // 소리가 끝남 (길이를 모를 때)
+          break;
         }
         // 마지막 문장이 조각 끝을 넘었으면 그 문장 끝까지를 인식된 구간으로
         _addCovered(start, lastCueEnd);

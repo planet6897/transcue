@@ -109,6 +109,9 @@ class SttLanguage extends SttEvent {
   final String code;
 }
 
+/// 이 구간에 소리가 없음 (영상 끝)
+class SttEnd extends SttEvent {}
+
 /// whisper-cli로 음성 인식. 인식되는 대로 큐를 내보낸다.
 Stream<SttEvent> transcribe({
   required String wavPath,

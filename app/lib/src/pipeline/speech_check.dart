@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import '../subtitle/bilingual_cue.dart';
-import 'media_tools.dart';
+import 'stt_engine.dart';
 import 'whisper.dart';
 
 /// 자막이 실제 음성과 같은 내용인지 대조한다.
@@ -98,14 +98,15 @@ Future<SpeechCheck> checkAgainstSpeech({
       if (samples >= 2 && pairs >= 80) break;
       final from = duration * f;
       if (from + _sampleLen > duration) continue;
-      final wav = '${tmp.path}/s.wav';
-      await extractAudio(input, wav, start: from, length: _sampleLen);
       final spoken = <String>[];
-      await for (final ev in transcribe(
-        wavPath: wav,
+      await for (final ev in transcribeRange(
+        input: input,
+        start: from,
+        length: _sampleLen,
         model: model,
         vadModel: vadModel,
         language: language,
+        tmp: tmp,
       )) {
         if (ev is SttCue) spoken.addAll(speechWords(ev.cue.original));
       }

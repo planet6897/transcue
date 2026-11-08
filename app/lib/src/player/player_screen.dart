@@ -318,6 +318,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ..showSnackBar(
             SnackBar(
               content: Text('이전에 보던 ${formatPosition(at)}부터 재생합니다'),
+              // 버튼이 있는 알림은 기본으로 계속 떠 있어 자막(한국어 줄)을 가린다
+              persist: false,
+              duration: const Duration(seconds: 5),
               action: SnackBarAction(
                 label: '처음부터',
                 onPressed: () => _player.seek(Duration.zero),
