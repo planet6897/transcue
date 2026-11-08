@@ -166,7 +166,23 @@ class SubtitleJob extends ChangeNotifier {
     );
   }
 
+  /// 저장된 결과를 읽는다. 버린 경우 읽다 만 값(싱크 정보 등)이 남지 않게 되돌린다.
+  /// (실사례: 잘못된 자막의 '싱크 +114.6초'가 음성 인식 자막에 표시됨)
   Future<bool> _loadCache() async {
+    if (await _readCache()) return true;
+    sourceLang = null;
+    originalFrom = '';
+    _osTried = false;
+    syncInfo = null;
+    _release = null;
+    speechMatch = null;
+    _complete = true;
+    _covered.clear();
+    _fromCache = false;
+    return false;
+  }
+
+  Future<bool> _readCache() async {
     if (_dbg('DUALCUE_NO_CACHE')) return false;
     final f = await _cacheFile();
     if (!await f.exists()) return false;
