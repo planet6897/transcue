@@ -27,7 +27,11 @@ class PlayerScreen extends StatefulWidget {
 }
 
 class _PlayerScreenState extends State<PlayerScreen> {
-  late final Player _player = Player();
+  late final Player _player = Player(
+    configuration: PlayerConfiguration(
+      logLevel: kDebugMode ? MPVLogLevel.warn : MPVLogLevel.error,
+    ),
+  );
   late final VideoController _controller = VideoController(_player);
   late final YtDlp _ytDlp = widget._ytDlp ?? YtDlp();
   final _view = DualSubtitleState();
@@ -41,11 +45,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void initState() {
     super.initState();
+    if (kDebugMode) {
+      final vol = double.tryParse(Platform.environment['DUALCUE_VOLUME'] ?? '');
+      if (vol != null) unawaited(_player.setVolume(vol));
+      _player.stream.log.listen(
+        (l) => debugPrint('[mpv] ${l.prefix}: ${l.text}'),
+      );
+    }
     AppSettings.load().then((s) {
       setState(() => _settings = s);
       // 개발용: DUALCUE_OPEN=<파일 경로> 로 실행하면 바로 연다 (실기기 자동 검증용)
       final auto = kDebugMode ? Platform.environment['DUALCUE_OPEN'] : null;
-      if (auto != null && auto.isNotEmpty) unawaited(_openPath(auto));
+      if (auto != null && auto.isNotEmpty) {
+        unawaited(
+          parseYoutubeId(auto) != null
+              ? _openYoutubeUrl(auto)
+              : _openPath(auto),
+        );
+      }
     });
   }
 
@@ -65,6 +82,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _startJob(JobSource source) {
+    // 개발용: DUALCUE_NO_JOB=1 이면 자막 작업(인식/번역 비용)을 건너뛴다
+    if (kDebugMode && Platform.environment['DUALCUE_NO_JOB'] == '1') return;
     _job?.dispose();
     final job = SubtitleJob(source: source, settings: _settings);
     var lastLog = '';
@@ -109,6 +128,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (kDebugMode) unawaited(_debugAutoplay());
   }
 
+  /// 개발용: 실제로 소리 트랙이 재생 중인지 로그로 확인
+  Future<void> _debugAudioState() async {
+    final native = _player.platform;
+    if (native is! NativePlayer) return;
+    for (final sec in [5, 10, 20]) {
+      await Future<void>.delayed(
+        Duration(seconds: sec == 5 ? 5 : sec / 2 ~/ 1),
+      );
+      final aid = await native.getProperty('aid');
+      final codec = await native.getProperty('current-tracks/audio/codec');
+      final vcodec = await native.getProperty('current-tracks/video/codec');
+      final h = await native.getProperty('current-tracks/video/demux-h');
+      debugPrint(
+        '[audio] t=${sec}s aid=$aid codec=$codec video=$vcodec ${h}p '
+        'playing=${_player.state.playing} pos=${_player.state.position} '
+        'buffering=${_player.state.buffering}',
+      );
+    }
+  }
+
   /// 개발용: DUALCUE_SEEK=<초>, DUALCUE_FULLSCREEN=1 (실기기 화면 검증용)
   Future<void> _debugAutoplay() async {
     final env = Platform.environment;
@@ -129,6 +168,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
       builder: (_) => const _YoutubeUrlDialog(),
     );
     if (url == null) return;
+    await _openYoutubeUrl(url);
+  }
+
+  Future<void> _openYoutubeUrl(String url) async {
     final id = parseYoutubeId(url);
     if (id == null) {
       _toast('YouTube 링크가 아닙니다');
@@ -139,10 +182,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
     try {
       final media = await _ytDlp.resolve(youtubeWatchUrl(id));
       setState(() => _title = media.title);
+      // 고화질은 영상/소리가 따로 온다. 소리는 영상이 실제로 로드된 뒤에 붙여야 한다
+      // (open()은 로드 완료 전에 반환되고, 그 사이 mpv audio-add는 조용히 실패함)
+      final loaded = _player.stream.duration
+          .firstWhere((d) => d > Duration.zero)
+          .timeout(const Duration(seconds: 30));
       await _player.open(Media(media.videoUrl, httpHeaders: media.httpHeaders));
       if (media.audioUrl != null) {
+        await loaded;
         await _player.setAudioTrack(AudioTrack.uri(media.audioUrl!));
       }
+      if (kDebugMode) unawaited(_debugAudioState());
       _startJob(YoutubeSource(media, _ytDlp));
     } catch (e) {
       debugPrint('YouTube open failed: $e');

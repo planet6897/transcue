@@ -86,8 +86,32 @@ class YoutubeMedia {
         formats.where((f) => hasV(f) && hasA(f) && h(f) <= maxHeight).toList()
           ..sort(byQuality);
 
+    // HLS(m3u8) 스트림을 우선한다. 직접(https) 스트림 URL은 yt-dlp 외의 플레이어에
+    // 403을 돌려주고, 마스터 재생목록은 mpv가 모든 화질을 한꺼번에 열다 멈춘다 (2026-11 실측).
+    // → HLS 영상 1개 + HLS 음성 1개 (각각 1초 안에 열림)
+    bool isHls(Map f) => '${f['protocol']}'.startsWith('m3u8');
+    final hlsVideo =
+        formats.where((f) => isHls(f) && hasV(f) && h(f) <= maxHeight).toList()
+          ..sort((a, b) {
+            final c = h(a).compareTo(h(b));
+            if (c != 0) return c;
+            // 같은 화질이면 H.264(avc1) 우선 — 하드웨어 디코딩
+            final av = '${a['vcodec']}'.startsWith('avc1') ? 1 : 0;
+            final bv = '${b['vcodec']}'.startsWith('avc1') ? 1 : 0;
+            return av.compareTo(bv);
+          });
+    final hlsAudio = formats.where((f) => isHls(f) && !hasV(f)).toList();
+    final hlsAudioBest =
+        hlsAudio
+            .where((f) => '${f['format_note']}'.contains('high'))
+            .firstOrNull ??
+        hlsAudio.lastOrNull;
+
     Map<String, dynamic>? video, audio;
-    if (videoOnly.isNotEmpty &&
+    if (hlsVideo.isNotEmpty && hlsAudioBest != null) {
+      video = hlsVideo.last;
+      audio = hlsAudioBest;
+    } else if (videoOnly.isNotEmpty &&
         audioOnly.isNotEmpty &&
         (muxed.isEmpty || h(videoOnly.last) > h(muxed.last))) {
       video = videoOnly.last;

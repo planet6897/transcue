@@ -103,6 +103,30 @@ void main() {
       expect(m.korean?.auto, isFalse);
     });
 
+    test('HLS 영상 + HLS 음성 우선 (H.264, high 음성)', () {
+      final m = YoutubeMedia.fromInfoJson({
+        ...info,
+        'formats': [
+          ...(info['formats'] as List),
+          fmt('609', h: 720, v: 'vp09', protocol: 'm3u8_native'),
+          fmt('232', h: 720, v: 'avc1', protocol: 'm3u8_native'),
+          fmt('231', h: 480, v: 'avc1', protocol: 'm3u8_native'),
+          {
+            ...fmt('233', protocol: 'm3u8_native'),
+            'acodec': null,
+            'format_note': 'Default, low',
+          },
+          {
+            ...fmt('234', protocol: 'm3u8_native'),
+            'acodec': null,
+            'format_note': 'Default, high',
+          },
+        ],
+      });
+      expect(m.videoUrl, 'https://cdn/232');
+      expect(m.audioUrl, 'https://cdn/234');
+    });
+
     test('분리 포맷이 없으면 영상+음성 통합 포맷', () {
       final m = YoutubeMedia.fromInfoJson({
         ...info,
