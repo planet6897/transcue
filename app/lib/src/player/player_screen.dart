@@ -85,7 +85,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // 개발용: DUALCUE_NO_JOB=1 이면 자막 작업(인식/번역 비용)을 건너뛴다
     if (kDebugMode && Platform.environment['DUALCUE_NO_JOB'] == '1') return;
     _job?.dispose();
-    final job = SubtitleJob(source: source, settings: _settings);
+    final job = SubtitleJob(
+      source: source,
+      settings: _settings,
+      playhead: () => _player.state.position,
+    );
     var lastLog = '';
     job.addListener(() {
       if (!mounted || _job != job) return;

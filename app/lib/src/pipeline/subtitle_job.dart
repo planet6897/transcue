@@ -47,10 +47,17 @@ enum JobStage {
 /// 순서: 캐시 → (내장 자막 | YouTube 자막) → 없으면 음성 추출 + whisper STT
 ///       → 한국어가 없는 줄은 Claude 번역. STT/번역 결과는 생기는 대로 [cues]에 반영.
 class SubtitleJob extends ChangeNotifier {
-  SubtitleJob({required this.source, required this.settings});
+  SubtitleJob({
+    required this.source,
+    required this.settings,
+    Duration Function()? playhead,
+  }) : playhead = playhead ?? (() => Duration.zero);
 
   final JobSource source;
   final AppSettings settings;
+
+  /// 현재 재생 위치. 음성 인식/번역을 이 위치부터 먼저 한다.
+  final Duration Function() playhead;
 
   List<BilingualCue> cues = const [];
   JobStage stage = JobStage.idle;
@@ -72,12 +79,27 @@ class SubtitleJob extends ChangeNotifier {
 
   bool _disposed = false;
   bool _sttDone = false;
-  int _translatedUpTo = 0; // 이 위치 이전은 번역 시도 완료
+
+  /// 음성 인식이 끝난 구간 (ms). 부분 결과 저장/이어하기, 번역 가능 여부 판단에 쓴다.
+  final List<(int, int)> _covered = [];
+
+  /// 저장된 결과가 끝까지 완료된 것인지 (음성 인식 도중 저장된 부분 결과면 false)
+  bool _complete = true;
 
   /// 캐시 형식/품질이 바뀌면 올린다. v2: whisper -mc 0 적용
   static const _cacheVersion = 2;
   static const _batchSize = 30;
+
+  /// 재생 위치 근처는 작은 묶음으로 빨리 번역한다
+  static const _nearBatchSize = 15;
   static const _contextSize = 5;
+
+  /// 음성 인식 조각 길이: 처음(또는 이동 직후)은 짧게 해서 자막이 빨리 나오게
+  static const _firstChunkMs = 45000;
+  static const _chunkMs = 180000;
+
+  /// 조각 끝에서 문장이 잘리지 않도록 더 읽는 시간
+  static const _tailMs = 4000;
 
   // ---- 진행 상태 ----
 
@@ -116,8 +138,12 @@ class SubtitleJob extends ChangeNotifier {
     return File('${dir.path}/${sha1.convert(utf8.encode(key))}.json');
   }
 
+  /// 개발용 스위치 (실기기 검증 시 저장 결과·API 비용에 영향 없게)
+  static bool _dbg(String k) => kDebugMode && Platform.environment[k] == '1';
+
   Future<void> _saveCache() async {
-    if (!_sttDone) return; // 인식이 끝난 결과만 저장
+    if (_dbg('DUALCUE_NO_CACHE')) return;
+    if (cues.isEmpty && _covered.isEmpty) return;
     final f = await _cacheFile();
     await f.writeAsString(
       jsonEncode({
@@ -126,12 +152,19 @@ class SubtitleJob extends ChangeNotifier {
         'from': originalFrom,
         'osTried': _osTried,
         'sync': ?syncInfo,
+        // 음성 인식 중간 저장: 다시 열면 남은 구간만 이어서 인식
+        'complete': _sttDone || originalFrom != fromStt,
+        if (originalFrom == fromStt)
+          'covered': [
+            for (final (a, b) in _covered) [a, b],
+          ],
         'cues': [for (final c in cues) c.toJson()],
       }),
     );
   }
 
   Future<bool> _loadCache() async {
+    if (_dbg('DUALCUE_NO_CACHE')) return false;
     final f = await _cacheFile();
     if (!await f.exists()) return false;
     try {
@@ -141,6 +174,10 @@ class SubtitleJob extends ChangeNotifier {
       originalFrom = '${j['from'] ?? '저장된 자막'}';
       _osTried = j['osTried'] == true;
       syncInfo = j['sync'] as String?;
+      _complete = j['complete'] != false;
+      for (final c in (j['covered'] as List? ?? []).cast<List>()) {
+        _addCovered((c[0] as num).toInt(), (c[1] as num).toInt());
+      }
       _fromCache = true;
       _setCues([
         for (final c in (j['cues'] as List).cast<Map<String, dynamic>>())
@@ -157,11 +194,15 @@ class SubtitleJob extends ChangeNotifier {
   Future<void> run() async {
     try {
       _set(JobStage.preparing, '자막 준비 중…');
-      if (await _loadCache()) {
-        _sttDone = true;
-        // 저장된 결과가 음성 인식이면 인터넷 자막을 먼저 찾아본다 (있으면 우선 사용)
-        if (_shouldTryOnlineOverCache) await _tryOnlineOverCache();
-      } else if (!await _loadExistingSubtitles()) {
+      final cached = await _loadCache();
+      var have = cached && _complete;
+      // 저장된 결과가 음성 인식이면 인터넷 자막을 먼저 찾아본다 (있으면 우선 사용)
+      if (cached && _shouldTryOnlineOverCache && await _tryOnlineOverCache()) {
+        have = true;
+      }
+      if (!cached && await _loadExistingSubtitles()) have = true;
+      if (!have) {
+        // 처음부터, 또는 중간 저장된 음성 인식을 이어서
         await _speechToText();
         // 인터넷에서 한국어 자막만 찾은 경우: 음성 인식 결과에 시간 기준으로 붙인다
         final ko = _onlineKorean;
@@ -251,15 +292,20 @@ class SubtitleJob extends ChangeNotifier {
       !_osTried &&
       originalFrom == fromStt;
 
-  Future<void> _tryOnlineOverCache() async {
+  /// 인터넷 원어 자막으로 교체했으면 true
+  Future<bool> _tryOnlineOverCache() async {
     final path = (source as LocalFileSource).path;
     final stt = cues;
     if (await _loadOnlineSubtitles(path, await probe(path))) {
       _fromCache = false; // 인터넷 자막으로 교체됨
-    } else if (_onlineKorean case final ko?) {
+      _covered.clear();
+      return true;
+    }
+    if (_onlineKorean case final ko?) {
       // 한국어 자막만 있으면 저장된 음성 인식 원문에 붙인다
       _setCues(mergeTranslation(stt, ko));
     }
+    return false;
   }
 
   /// 인터넷에서 찾은 한국어 자막 (원본 시간 그대로, 싱크 보정 전)
@@ -342,7 +388,7 @@ class SubtitleJob extends ChangeNotifier {
   /// OpenSubtitles에서 원어/한국어 자막을 찾는다. 원어를 찾으면 true.
   /// 실패해도 예외를 내지 않고 음성 인식으로 넘어간다.
   Future<bool> _loadOnlineSubtitles(String path, MediaInfo info) async {
-    if (!settings.hasOpenSubtitles) return false;
+    if (!settings.hasOpenSubtitles || _dbg('DUALCUE_NO_ONLINE')) return false;
     _set(JobStage.preparing, '인터넷 자막 검색 중 (OpenSubtitles)…');
     final lang = osLang(info.audioLanguage);
     try {
@@ -398,6 +444,72 @@ class SubtitleJob extends ChangeNotifier {
     }
   }
 
+  // ---- 음성 인식 (재생 위치부터 조각 단위) ----
+
+  void _addCovered(int a, int b) {
+    if (b <= a) return;
+    _covered
+      ..add((a, b))
+      ..sort((x, y) => x.$1.compareTo(y.$1));
+    final merged = <(int, int)>[];
+    for (final c in _covered) {
+      if (merged.isNotEmpty && c.$1 <= merged.last.$2 + 50) {
+        final l = merged.removeLast();
+        merged.add((l.$1, c.$2 > l.$2 ? c.$2 : l.$2));
+      } else {
+        merged.add(c);
+      }
+    }
+    _covered
+      ..clear()
+      ..addAll(merged);
+  }
+
+  bool _inCovered(int ms) => _covered.any((c) => ms >= c.$1 && ms < c.$2);
+
+  int get _coveredMs => _covered.fold(0, (a, c) => a + c.$2 - c.$1);
+
+  /// [from] 이후 처음으로 인식이 안 된 위치. 끝까지 다 됐으면 null.
+  int? _firstGap(int from, int total) {
+    var t = from;
+    for (final (a, b) in _covered) {
+      if (b <= t) continue;
+      if (a > t) break;
+      t = b;
+    }
+    return t < total - 500 ? t : null;
+  }
+
+  int _nextCoveredStart(int after, int total) {
+    var n = total;
+    for (final (a, _) in _covered) {
+      if (a > after && a < n) n = a;
+    }
+    return n;
+  }
+
+  /// 재생 위치에 맞춰 큐를 시간순으로 끼워 넣는다
+  void _insertCue(BilingualCue c) {
+    var lo = 0, hi = cues.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (cues[mid].start <= c.start) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    _setCues([...cues.take(lo), c, ...cues.skip(lo)]);
+  }
+
+  String _sttStatus(double fraction) {
+    final t = cues.where((c) => c.translation != null).length;
+    final trans = settings.hasClaudeKey && sourceLang != 'ko'
+        ? ' · 번역 $t줄'
+        : '';
+    return '음성 인식 ${(fraction * 100).toStringAsFixed(0)}% · ${cues.length}줄$trans';
+  }
+
   Future<void> _speechToText() async {
     final model = await ensureWhisperModel(
       settings.whisperModel,
@@ -409,71 +521,135 @@ class SubtitleJob extends ChangeNotifier {
     );
     final vad = await ensureVadModel();
 
+    final (input, headers, duration) = switch (source) {
+      LocalFileSource(:final path) => (
+        path,
+        const <String, String>{},
+        (await probe(path)).duration,
+      ),
+      YoutubeSource(:final media) => (
+        media.audioUrl ?? media.videoUrl,
+        media.httpHeaders,
+        media.duration,
+      ),
+    };
+    // 길이를 모르면 넉넉히 잡고, 소리가 더 없으면 끝낸다
+    final total = duration != null && duration > Duration.zero
+        ? duration.inMilliseconds
+        : const Duration(hours: 6).inMilliseconds;
+
+    originalFrom = fromStt;
     final tmp = await Directory.systemTemp.createTemp('dualcue_');
     try {
-      final wav = '${tmp.path}/audio.wav';
-      final (input, headers, duration) = switch (source) {
-        LocalFileSource(:final path) => (
-          path,
-          const <String, String>{},
-          (await probe(path)).duration,
-        ),
-        YoutubeSource(:final media) => (
-          media.audioUrl ?? media.videoUrl,
-          media.httpHeaders,
-          null,
-        ),
-      };
-      _set(JobStage.extractingAudio, '음성 추출 중…', duration == null ? null : 0);
-      await extractAudio(
-        input,
-        wav,
-        httpHeaders: headers,
-        duration: duration,
-        onProgress: (p) => _set(
-          JobStage.extractingAudio,
-          '음성 추출 중 ${(p * 100).toStringAsFixed(0)}%',
-          p,
-        ),
+      int? lastEnd;
+      _set(
+        JobStage.transcribing,
+        _sttStatus(_coveredMs / total),
+        _coveredMs / total,
       );
+      while (!_disposed) {
+        // 재생 위치(2초 앞)부터 비어 있는 곳 → 없으면 처음부터 비어 있는 곳
+        final ph = (playhead().inMilliseconds - 2000).clamp(0, total);
+        final start = _firstGap(ph, total) ?? _firstGap(0, total);
+        if (start == null) break;
+        final jumped = lastEnd == null || (start - lastEnd).abs() > 1000;
+        final stop = _nextCoveredStart(start, total);
+        final hardEnd = [
+          start + (jumped ? _firstChunkMs : _chunkMs),
+          stop,
+          total,
+        ].reduce((a, b) => a < b ? a : b);
+        final readEnd = hardEnd >= stop
+            ? hardEnd
+            : (hardEnd + _tailMs).clamp(0, total);
 
-      originalFrom = fromStt;
-      _set(JobStage.transcribing, '음성 인식 중…', 0);
-      final found = <BilingualCue>[];
-      await for (final ev in transcribe(
-        wavPath: wav,
-        model: model,
-        vadModel: vad,
-      )) {
-        switch (ev) {
-          case SttCue(:final cue):
-            found.add(cue);
-            _setCues(List.unmodifiable(found));
-            _kickTranslation();
-          case SttProgress(:final fraction):
-            _set(
-              JobStage.transcribing,
-              '음성 인식 중 ${(fraction * 100).toStringAsFixed(0)}% · ${found.length}줄',
-              fraction,
-            );
-          case SttLanguage(:final code):
-            sourceLang = code;
+        debugPrint(
+          '[stt] chunk ${start ~/ 1000}s → ${hardEnd ~/ 1000}s '
+          '(playhead ${playhead().inSeconds}s)',
+        );
+        final wav = '${tmp.path}/chunk.wav';
+        await extractAudio(
+          input,
+          wav,
+          httpHeaders: headers,
+          start: Duration(milliseconds: start),
+          length: Duration(milliseconds: readEnd - start),
+        );
+        if (await File(wav).length() < 32000) {
+          _addCovered(start, total); // 소리가 끝남 (길이를 모를 때)
+          break;
         }
+
+        var lastCueEnd = hardEnd;
+        await for (final ev in transcribe(
+          wavPath: wav,
+          model: model,
+          vadModel: vad,
+          language: sourceLang ?? 'auto',
+        )) {
+          switch (ev) {
+            case SttCue(:final cue):
+              final c = shiftCues([cue], Duration(milliseconds: start)).first;
+              final s = c.start.inMilliseconds;
+              // 다음 조각에 속하는 줄, 이미 인식한 구간의 줄은 버린다
+              if (s >= hardEnd || _inCovered(s)) continue;
+              final e = c.end.inMilliseconds;
+              if (e > lastCueEnd) lastCueEnd = e > readEnd ? readEnd : e;
+              _insertCue(c);
+            case SttProgress(:final fraction):
+              final p = (_coveredMs + fraction * (hardEnd - start)) / total;
+              _set(JobStage.transcribing, _sttStatus(p), p);
+            case SttLanguage(:final code):
+              sourceLang ??= code;
+          }
+        }
+        // 마지막 문장이 조각 끝을 넘었으면 그 문장 끝까지를 인식된 구간으로
+        _addCovered(start, lastCueEnd);
+        lastEnd = lastCueEnd;
+        final p = _coveredMs / total;
+        _set(JobStage.transcribing, _sttStatus(p), p);
+        await _saveCache(); // 중간 저장
+        _kickTranslation(); // 이 조각을 바로 번역 (다음 조각 인식과 동시에)
       }
     } finally {
       await tmp.delete(recursive: true);
     }
   }
 
-  // ---- 번역 ----
+  // ---- 번역 (재생 위치 근처부터, 음성 인식과 동시에) ----
 
   Future<void>? _loop;
 
-  bool get _needsTranslation =>
-      sourceLang != 'ko' && cues.any((c) => c.translation == null);
+  /// 이번 실행에서 번역을 시도한 줄 (누락돼도 무한 반복하지 않도록)
+  final _attempted = <String>{};
 
-  /// 번역 루프가 없으면 시작한다. 인식 중에는 묶음이 찰 때마다 불린다.
+  String _key(BilingualCue c) => '${c.start.inMilliseconds}|${c.original}';
+
+  /// 번역해도 되는 줄: 음성 인식이 끝난 구간의 줄 (조각 중간 줄은 아직 바뀔 수 있음)
+  bool _isFinal(BilingualCue c) =>
+      _sttDone || originalFrom != fromStt || _inCovered(c.start.inMilliseconds);
+
+  List<BilingualCue> _pendingByPriority() {
+    final ph = playhead().inMilliseconds - 5000;
+    final p = [
+      for (final c in cues)
+        if (c.translation == null &&
+            !_attempted.contains(_key(c)) &&
+            _isFinal(c))
+          c,
+    ];
+    return [
+      ...p.where((c) => c.end.inMilliseconds >= ph),
+      ...p.where((c) => c.end.inMilliseconds < ph),
+    ];
+  }
+
+  bool get _needsTranslation =>
+      sourceLang != 'ko' && _pendingByPriority().isNotEmpty;
+
+  /// 번역 루프가 없으면 시작한다. 음성 인식 조각이 끝날 때마다 불린다.
   void _kickTranslation() {
+    if (_dbg('DUALCUE_NO_TRANSLATE')) return;
     if (_loop != null || !_needsTranslation) return;
     if (!settings.hasClaudeKey) {
       notice = '설정(⚙)에서 Claude API 키를 등록하면 한국어 번역이 표시됩니다';
@@ -486,7 +662,7 @@ class SubtitleJob extends ChangeNotifier {
   /// 한국어가 없는 줄을 모두 번역할 때까지 기다린다.
   /// 설정에서 API 키를 넣은 뒤 다시 불러도 된다.
   Future<void> translateRemaining() async {
-    _translatedUpTo = 0; // 앞에서 누락된 줄도 다시 시도
+    _attempted.clear(); // 앞에서 누락된 줄도 다시 시도
     notice = null;
     while (!_disposed) {
       _kickTranslation();
@@ -494,8 +670,7 @@ class SubtitleJob extends ChangeNotifier {
       if (l == null) break;
       await l;
       if (notice != null) break;
-      final left = cues.skip(_translatedUpTo).any((c) => c.translation == null);
-      if (!left) break;
+      if (_pendingByPriority().isEmpty) break;
     }
     if (!_disposed && stage != JobStage.failed && _sttDone) {
       _set(JobStage.done, _summary());
@@ -509,23 +684,23 @@ class SubtitleJob extends ChangeNotifier {
     );
     try {
       while (!_disposed) {
-        final pending = <int>[
-          for (var i = _translatedUpTo; i < cues.length; i++)
-            if (cues[i].translation == null) i,
-        ];
-        // 인식 중에는 마지막 줄이 아직 이어질 수 있어 빼고, 묶음이 찰 때까지 기다린다
-        final ready = _sttDone ? pending.length : pending.length - 1;
-        if (ready <= 0 || (!_sttDone && ready < _batchSize)) return;
+        final pending = _pendingByPriority();
+        if (pending.isEmpty) return;
+        final near = (pending.first.start - playhead()).inSeconds.abs() < 30;
+        final batch = pending.take(near ? _nearBatchSize : _batchSize).toList();
 
-        final ids = pending.take(_batchSize).toList();
-        final first = ids.first;
-        final batch = TranslationBatch(
+        final firstIdx = cues.indexWhere((c) => identical(c, batch.first));
+        final req = TranslationBatch(
           sourceLang: sourceLang ?? 'auto',
           context: [
-            for (var i = (first - _contextSize).clamp(0, first); i < first; i++)
+            for (
+              var i = (firstIdx - _contextSize).clamp(0, firstIdx);
+              i < firstIdx;
+              i++
+            )
               (cues[i].original, cues[i].translation),
           ],
-          items: {for (final i in ids) i: cues[i].original},
+          items: {for (var i = 0; i < batch.length; i++) i: batch[i].original},
         );
         if (_sttDone) {
           final done = cues.where((c) => c.translation != null).length;
@@ -535,14 +710,23 @@ class SubtitleJob extends ChangeNotifier {
             done / cues.length,
           );
         }
-        final out = await tr.translate(batch);
-        final next = [...cues];
-        for (final i in ids) {
-          final t = out[i];
-          if (t != null && t.isNotEmpty) next[i] = next[i].withTranslation(t);
+        final out = await tr.translate(req);
+        // 기다리는 동안 음성 인식이 줄을 끼워 넣었을 수 있어 위치가 아니라 내용으로 찾는다
+        final byKey = <String, String>{
+          for (var i = 0; i < batch.length; i++)
+            if ((out[i] ?? '').isNotEmpty) _key(batch[i]): out[i]!,
+        };
+        _attempted.addAll(
+          batch.map(_key),
+        ); // 누락된 줄은 다음 translateRemaining 때 재시도
+        _setCues([
+          for (final c in cues)
+            if (byKey[_key(c)] case final t?) c.withTranslation(t) else c,
+        ]);
+        if (stage == JobStage.transcribing) {
+          // 인식 중이면 상태 줄의 "번역 N줄"만 갱신
+          _set(JobStage.transcribing, _sttStatus(progress ?? 0), progress);
         }
-        _translatedUpTo = ids.last + 1; // 누락된 줄은 다음 translateRemaining 때 재시도
-        _setCues(next);
         await _saveCache();
       }
     } on TranslateException catch (e) {

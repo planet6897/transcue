@@ -29,7 +29,11 @@ class YoutubeMedia {
     this.language,
     this.original,
     this.korean,
+    this.duration,
   });
+
+  /// 영상 길이 (yt-dlp `duration`)
+  final Duration? duration;
 
   final String id;
   final String title;
@@ -162,6 +166,9 @@ class YoutubeMedia {
       language: language,
       original: original,
       korean: korean,
+      duration: info['duration'] is num
+          ? Duration(milliseconds: ((info['duration'] as num) * 1000).round())
+          : null,
     );
   }
 

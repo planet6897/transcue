@@ -140,6 +140,8 @@ Future<void> extractAudio(
   Map<String, String> httpHeaders = const {},
   Duration? duration,
   void Function(double)? onProgress,
+  Duration? start,
+  Duration? length,
 }) async {
   final args = [
     '-v',
@@ -148,6 +150,15 @@ Future<void> extractAudio(
     if (httpHeaders.isNotEmpty) ...[
       '-headers',
       httpHeaders.entries.map((e) => '${e.key}: ${e.value}\r\n').join(),
+    ],
+    // -i 앞의 -ss/-t: 빠르게 해당 구간만 읽는다 (조각 단위 음성 인식)
+    if (start != null) ...[
+      '-ss',
+      (start.inMilliseconds / 1000).toStringAsFixed(3),
+    ],
+    if (length != null) ...[
+      '-t',
+      (length.inMilliseconds / 1000).toStringAsFixed(3),
     ],
     '-i',
     input,
