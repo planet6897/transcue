@@ -464,6 +464,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
     keyboardShortcuts: _shortcuts,
   );
 
+  /// 터치 기기(태블릿·휴대폰): 아래 슬라이드 바로 이동, 두 번 탭으로 ±10초,
+  /// 가로로 밀어서 이동. 화면을 한 번 탭하면 조작 버튼이 나타난다.
+  static const _touchTheme = MaterialVideoControlsThemeData(
+    seekOnDoubleTap: true,
+    seekGesture: true,
+    displaySeekBar: true,
+    seekBarHeight: 4,
+    seekBarContainerHeight: 48, // 손가락으로 잡기 쉽게
+    seekBarThumbSize: 18,
+    seekBarPositionColor: Color(0xFF80DEEA),
+    seekBarThumbColor: Color(0xFF80DEEA),
+    buttonBarButtonSize: 28,
+    controlsHoverDuration: Duration(seconds: 4),
+  );
+
+  static final bool _touch = Platform.isAndroid || Platform.isIOS;
+
   @override
   Widget build(BuildContext context) {
     final job = _job;
@@ -566,25 +583,32 @@ class _PlayerScreenState extends State<PlayerScreen> {
           body: Stack(
             children: [
               // media_kit 내장 자막 렌더링은 끄고 자체 오버레이를 사용한다.
-              MaterialDesktopVideoControlsTheme(
-                normal: _controlsTheme,
-                fullscreen: _controlsTheme,
-                child: Video(
-                  key: _videoKey,
-                  controller: _controller,
-                  subtitleViewConfiguration: const SubtitleViewConfiguration(
-                    visible: false,
-                  ),
-                  // controls 빌더는 전체 화면에서도 다시 쓰이므로 자막을 여기에 넣는다
-                  controls: (state) => Stack(
-                    children: [
-                      LiveDualSubtitle(
-                        position: _player.stream.position,
-                        currentPosition: () => _player.state.position,
-                        view: _view,
-                      ),
-                      MaterialDesktopVideoControls(state),
-                    ],
+              MaterialVideoControlsTheme(
+                normal: _touchTheme,
+                fullscreen: _touchTheme,
+                child: MaterialDesktopVideoControlsTheme(
+                  normal: _controlsTheme,
+                  fullscreen: _controlsTheme,
+                  child: Video(
+                    key: _videoKey,
+                    controller: _controller,
+                    subtitleViewConfiguration: const SubtitleViewConfiguration(
+                      visible: false,
+                    ),
+                    // controls 빌더는 전체 화면에서도 다시 쓰이므로 자막을 여기에 넣는다
+                    controls: (state) => Stack(
+                      children: [
+                        LiveDualSubtitle(
+                          position: _player.stream.position,
+                          currentPosition: () => _player.state.position,
+                          view: _view,
+                        ),
+                        if (_touch)
+                          MaterialVideoControls(state)
+                        else
+                          MaterialDesktopVideoControls(state),
+                      ],
+                    ),
                   ),
                 ),
               ),
