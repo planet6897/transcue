@@ -126,7 +126,18 @@ Stream<SttEvent> transcribe({
     '-t',
     '${Platform.numberOfProcessors.clamp(2, 8)}',
     '-pp',
-    if (vadModel != null) ...['--vad', '-vm', vadModel.path],
+    // 앞 문장을 문맥으로 넘기지 않는다. 넘기면 긴 영상 중간부터 구두점/대문자가 사라지고
+    // 문장이 길게 이어지는 현상이 생긴다 (Knight Rider 96분 실측: 482줄 → 1,252줄)
+    '-mc',
+    '0',
+    if (vadModel != null) ...[
+      '--vad',
+      '-vm',
+      vadModel.path,
+      // 말소리 구간을 15초 이하로 잘라 자막 한 줄이 너무 길어지지 않게 한다
+      '-vmsd',
+      '15',
+    ],
   ];
   final p = await Process.start(await whisperCli(), args);
   final events = StreamController<SttEvent>();

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
+import '../online/opensubtitles.dart';
 import '../settings/app_settings.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
@@ -66,6 +67,8 @@ class SubtitleJob extends ChangeNotifier {
   bool _sttDone = false;
   int _translatedUpTo = 0; // 이 위치 이전은 번역 시도 완료
 
+  /// 캐시 형식/품질이 바뀌면 올린다. v2: whisper -mc 0 적용
+  static const _cacheVersion = 2;
   static const _batchSize = 30;
   static const _contextSize = 5;
 
@@ -111,7 +114,7 @@ class SubtitleJob extends ChangeNotifier {
     final f = await _cacheFile();
     await f.writeAsString(
       jsonEncode({
-        'v': 1,
+        'v': _cacheVersion,
         'lang': sourceLang,
         'from': originalFrom,
         'cues': [for (final c in cues) c.toJson()],
@@ -124,6 +127,7 @@ class SubtitleJob extends ChangeNotifier {
     if (!await f.exists()) return false;
     try {
       final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      if (j['v'] != _cacheVersion) return false; // 이전 버전 결과는 다시 만든다
       sourceLang = j['lang'] as String?;
       originalFrom = '${j['from'] ?? '저장된 자막'} (저장됨)';
       _setCues([
@@ -145,6 +149,9 @@ class SubtitleJob extends ChangeNotifier {
         _sttDone = true;
       } else if (!await _loadExistingSubtitles()) {
         await _speechToText();
+        // 인터넷에서 한국어 자막만 찾은 경우: 음성 인식 결과에 시간 기준으로 붙인다
+        final ko = _onlineKorean;
+        if (ko != null) _setCues(mergeTranslation(cues, ko));
       }
       _sttDone = true;
       await _saveCache();
@@ -175,17 +182,20 @@ class SubtitleJob extends ChangeNotifier {
       case LocalFileSource(:final path):
         final info = await probe(path);
         final orig = info.originalTrack;
-        if (orig == null) return false;
-        var c = await extractEmbeddedSubtitle(path, orig);
-        if (c.isEmpty) return false;
-        final ko = info.koreanTrack;
-        if (ko != null) {
-          c = mergeTranslation(c, await extractEmbeddedSubtitle(path, ko));
+        if (orig != null) {
+          var c = await extractEmbeddedSubtitle(path, orig);
+          if (c.isNotEmpty) {
+            final ko = info.koreanTrack;
+            if (ko != null) {
+              c = mergeTranslation(c, await extractEmbeddedSubtitle(path, ko));
+            }
+            sourceLang = orig.language;
+            originalFrom = '내장 자막';
+            _setCues(c);
+            return true;
+          }
         }
-        sourceLang = orig.language;
-        originalFrom = '내장 자막';
-        _setCues(c);
-        return true;
+        return _loadOnlineSubtitles(path, info);
 
       case YoutubeSource(:final media, :final ytDlp):
         final orig = media.original;
@@ -209,6 +219,65 @@ class SubtitleJob extends ChangeNotifier {
           }
         }
         return true;
+    }
+  }
+
+  /// 인터넷에서 찾은 한국어 자막 (원어 자막은 못 찾았을 때 STT 결과에 병합)
+  List<BilingualCue>? _onlineKorean;
+
+  /// OpenSubtitles에서 원어/한국어 자막을 찾는다. 원어를 찾으면 true.
+  /// 실패해도 예외를 내지 않고 음성 인식으로 넘어간다.
+  Future<bool> _loadOnlineSubtitles(String path, MediaInfo info) async {
+    if (!settings.hasOpenSubtitles) return false;
+    _set(JobStage.preparing, '인터넷 자막 검색 중 (OpenSubtitles)…');
+    final lang = osLang(info.audioLanguage);
+    try {
+      final os = OpenSubtitlesClient(
+        apiKey: settings.osApiKey,
+        username: settings.osUsername,
+        password: settings.osPassword,
+      );
+      final name = parseReleaseName(path);
+      String? hash;
+      try {
+        hash = await openSubtitlesHash(File(path));
+      } catch (_) {}
+      final hits = await os.search(
+        hash: hash,
+        name: name,
+        languages: lang == 'ko' ? 'ko' : '$lang,ko',
+      );
+      final origHit = pickBest(hits, lang);
+      final koHit = lang == 'ko' ? null : pickBest(hits, 'ko');
+      debugPrint(
+        'OpenSubtitles ${name.title} S${name.season}E${name.episode} '
+        'hash=$hash hits=${hits.length} orig=${origHit?.release} ko=${koHit?.release}',
+      );
+
+      List<BilingualCue>? koCues;
+      if (koHit != null) {
+        _set(JobStage.preparing, '한국어 자막 내려받는 중 (OpenSubtitles)…');
+        koCues = parseWebVtt(await os.download(koHit.fileId));
+      }
+      if (origHit == null) {
+        _onlineKorean = koCues;
+        return false;
+      }
+      _set(JobStage.preparing, '자막 내려받는 중 (OpenSubtitles)…');
+      var c = parseWebVtt(await os.download(origHit.fileId));
+      if (c.isEmpty) return false;
+      if (koCues != null) c = mergeTranslation(c, koCues);
+      sourceLang = lang.split('-').first;
+      originalFrom = origHit.hashMatch
+          ? 'OpenSubtitles · 파일 일치'
+          : 'OpenSubtitles · 이름 검색 (싱크 확인 필요)';
+      _setCues(c);
+      return true;
+    } on Exception catch (e) {
+      debugPrint('OpenSubtitles failed: $e');
+      notice = '인터넷 자막을 가져오지 못해 음성 인식으로 진행합니다 ($e)';
+      if (!_disposed) notifyListeners();
+      return false;
     }
   }
 

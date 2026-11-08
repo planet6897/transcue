@@ -42,11 +42,21 @@ class AppSettings {
     this.claudeApiKey = '',
     this.claudeModel = ClaudeModel.opus,
     this.whisperModel = WhisperModel.turbo,
+    this.osApiKey = '',
+    this.osUsername = '',
+    this.osPassword = '',
   });
 
   String claudeApiKey;
   ClaudeModel claudeModel;
   WhisperModel whisperModel;
+
+  /// OpenSubtitles.com (인터넷 자막 검색). 아이디/비밀번호는 선택.
+  String osApiKey;
+  String osUsername;
+  String osPassword;
+
+  bool get hasOpenSubtitles => osApiKey.trim().isNotEmpty;
 
   bool get hasClaudeKey => claudeApiKey.trim().isNotEmpty;
 
@@ -74,6 +84,9 @@ class AppSettings {
           (m) => m.name == j['whisperModel'],
           orElse: () => WhisperModel.turbo,
         ),
+        osApiKey: j['osApiKey'] as String? ?? '',
+        osUsername: j['osUsername'] as String? ?? '',
+        osPassword: j['osPassword'] as String? ?? '',
       );
     } catch (_) {
       return AppSettings();
@@ -87,6 +100,9 @@ class AppSettings {
         'claudeApiKey': claudeApiKey.trim(),
         'claudeModel': claudeModel.name,
         'whisperModel': whisperModel.name,
+        'osApiKey': osApiKey.trim(),
+        'osUsername': osUsername.trim(),
+        'osPassword': osPassword,
       }),
     );
     if (!Platform.isWindows) {

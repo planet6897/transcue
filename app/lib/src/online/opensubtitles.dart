@@ -1,0 +1,296 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+
+/// OpenSubtitles 파일 해시: 파일 크기 + 앞/뒤 64KB를 8바이트(LE) 단위로 더한 값 (mod 2^64).
+/// 같은 릴리스 파일이면 같은 해시 → 싱크가 맞는 자막을 찾을 수 있다.
+Future<String> openSubtitlesHash(File file) async {
+  const chunk = 65536;
+  final size = await file.length();
+  if (size < chunk * 2) throw const FormatException('파일이 너무 작습니다');
+  final raf = await file.open();
+  try {
+    var h = size; // Dart int는 64비트로 감싸며 더해진다 (mod 2^64)
+    for (final offset in [0, size - chunk]) {
+      await raf.setPosition(offset);
+      final data = ByteData.sublistView(await raf.read(chunk));
+      for (var i = 0; i < chunk; i += 8) {
+        h += data.getUint64(i, Endian.little);
+      }
+    }
+    return BigInt.from(h).toUnsigned(64).toRadixString(16).padLeft(16, '0');
+  } finally {
+    await raf.close();
+  }
+}
+
+/// 파일 이름에서 찾은 검색 정보
+class ReleaseName {
+  const ReleaseName({
+    required this.title,
+    this.year,
+    this.season,
+    this.episode,
+  });
+  final String title;
+  final int? year;
+  final int? season;
+  final int? episode;
+
+  bool get isEpisode => season != null && episode != null;
+}
+
+final _episodeRe = RegExp(
+  r'^(.*?)[\s._\-\[(]*[sS](\d{1,2})[\s._]*[eE](\d{1,3})',
+);
+final _yearRe = RegExp(r'^(.*?)[\s._\-\[(]+((?:19|20)\d{2})(?:[\s._\-\])]|$)');
+
+String _cleanTitle(String s) => s
+    .replaceAll(RegExp(r'[._]'), ' ')
+    .replaceAll(RegExp(r'\s*\((?:19|20)\d{2}\)\s*'), ' ')
+    .replaceAll(RegExp(r'\s+'), ' ')
+    .trim();
+
+/// `Knight Rider S01E01-E02 Knight of the Phoenix.mkv` → Knight Rider, S1E1
+/// `The.Matrix.1999.1080p.BluRay.mkv` → The Matrix (1999)
+ReleaseName parseReleaseName(String path) {
+  var name = path.split(RegExp(r'[/\\]')).last;
+  name = name.replaceFirst(RegExp(r'\.[A-Za-z0-9]{2,4}$'), '');
+  final ep = _episodeRe.firstMatch(name);
+  if (ep != null && _cleanTitle(ep[1]!).isNotEmpty) {
+    return ReleaseName(
+      title: _cleanTitle(ep[1]!),
+      season: int.parse(ep[2]!),
+      episode: int.parse(ep[3]!),
+    );
+  }
+  final y = _yearRe.firstMatch(name);
+  if (y != null && _cleanTitle(y[1]!).isNotEmpty) {
+    return ReleaseName(title: _cleanTitle(y[1]!), year: int.parse(y[2]!));
+  }
+  return ReleaseName(title: _cleanTitle(name));
+}
+
+/// 검색 결과 하나 (자막 파일 하나)
+class SubtitleHit {
+  const SubtitleHit({
+    required this.fileId,
+    required this.language,
+    required this.hashMatch,
+    required this.downloads,
+    required this.machine,
+    required this.release,
+  });
+
+  final int fileId;
+  final String language;
+  final bool hashMatch;
+  final int downloads;
+
+  /// 기계/AI 번역 자막 여부 (가능하면 사람이 만든 자막 선택)
+  final bool machine;
+  final String release;
+
+  static List<SubtitleHit> fromSearchJson(Map<String, dynamic> j) {
+    final out = <SubtitleHit>[];
+    for (final d in (j['data'] as List? ?? []).cast<Map>()) {
+      final a = (d['attributes'] as Map?) ?? {};
+      final files = (a['files'] as List? ?? []).cast<Map>();
+      // 여러 파일(CD1/CD2)로 나뉜 자막은 제외
+      if (files.length != 1 || files.first['file_id'] == null) continue;
+      out.add(
+        SubtitleHit(
+          fileId: (files.first['file_id'] as num).toInt(),
+          language: '${a['language'] ?? ''}',
+          hashMatch: a['moviehash_match'] == true,
+          downloads: (a['download_count'] as num?)?.toInt() ?? 0,
+          machine:
+              a['machine_translated'] == true || a['ai_translated'] == true,
+          release: '${a['release'] ?? ''}',
+        ),
+      );
+    }
+    return out;
+  }
+}
+
+/// 해당 언어에서 가장 좋은 자막: 해시 일치 > 사람 번역 > 다운로드 수
+SubtitleHit? pickBest(List<SubtitleHit> hits, String lang) {
+  final c = hits.where((h) => h.language.toLowerCase() == lang).toList()
+    ..sort((a, b) {
+      if (a.hashMatch != b.hashMatch) return a.hashMatch ? -1 : 1;
+      if (a.machine != b.machine) return a.machine ? 1 : -1;
+      return b.downloads.compareTo(a.downloads);
+    });
+  return c.firstOrNull;
+}
+
+/// ISO 639-2(ffprobe) → OpenSubtitles 언어 코드
+String osLang(String? iso) => switch (iso) {
+  'eng' || 'en' || null => 'en',
+  'jpn' || 'ja' => 'ja',
+  'fra' || 'fre' || 'fr' => 'fr',
+  'deu' || 'ger' || 'de' => 'de',
+  'spa' || 'es' => 'es',
+  'ita' || 'it' => 'it',
+  'rus' || 'ru' => 'ru',
+  'chi' || 'zho' || 'zh' => 'zh-cn',
+  'kor' || 'ko' => 'ko',
+  'por' || 'pt' => 'pt-pt',
+  _ => iso.length == 2 ? iso : 'en',
+};
+
+class OpenSubtitlesException implements Exception {
+  const OpenSubtitlesException(this.message);
+  final String message;
+  @override
+  String toString() => 'OpenSubtitles: $message';
+}
+
+/// OpenSubtitles.com REST API v1 클라이언트.
+/// API 키는 필수, 아이디/비밀번호는 선택 (넣으면 계정의 다운로드 한도 사용).
+class OpenSubtitlesClient {
+  OpenSubtitlesClient({
+    required this.apiKey,
+    this.username = '',
+    this.password = '',
+  });
+
+  final String apiKey;
+  final String username;
+  final String password;
+
+  static const userAgent = 'DualCue v0.1.0';
+  String _host = 'api.opensubtitles.com';
+  String? _token;
+
+  Future<Map<String, dynamic>> _call(
+    String method,
+    String path, {
+    Map<String, String>? query,
+    Map<String, Object?>? body,
+  }) async {
+    // API 규칙: 쿼리 파라미터는 이름순, 값은 소문자 (아니면 리다이렉트됨)
+    final q = query == null
+        ? null
+        : Map.fromEntries(
+            (query.entries.toList()..sort((a, b) => a.key.compareTo(b.key)))
+                .map((e) => MapEntry(e.key, e.value.toLowerCase())),
+          );
+    final uri = Uri.https(_host, '/api/v1$path', q);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 20);
+    try {
+      final req = await client.openUrl(method, uri);
+      req.headers
+        ..set('Api-Key', apiKey)
+        ..set('User-Agent', userAgent)
+        ..set('Accept', 'application/json');
+      if (_token != null) req.headers.set('Authorization', 'Bearer $_token');
+      if (body != null) {
+        req.headers.contentType = ContentType.json;
+        req.add(utf8.encode(jsonEncode(body)));
+      }
+      final res = await req.close().timeout(const Duration(seconds: 30));
+      final text = await res.transform(utf8.decoder).join();
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        throw OpenSubtitlesException(
+          'API 키 또는 계정 정보가 올바르지 않습니다 (${res.statusCode})',
+        );
+      }
+      if (res.statusCode == 406) {
+        throw const OpenSubtitlesException('오늘 다운로드 한도를 모두 사용했습니다');
+      }
+      if (res.statusCode == 429) {
+        throw const OpenSubtitlesException('요청이 너무 많습니다. 잠시 후 다시 시도하세요');
+      }
+      if (res.statusCode >= 300) {
+        throw OpenSubtitlesException(
+          'HTTP ${res.statusCode}: ${text.length > 200 ? text.substring(0, 200) : text}',
+        );
+      }
+      return jsonDecode(text) as Map<String, dynamic>;
+    } finally {
+      client.close();
+    }
+  }
+
+  Future<void> _login() async {
+    if (_token != null || username.isEmpty || password.isEmpty) return;
+    final j = await _call(
+      'POST',
+      '/login',
+      body: {'username': username, 'password': password},
+    );
+    _token = j['token'] as String?;
+    final base = j['base_url'] as String?;
+    if (base != null && base.isNotEmpty) {
+      _host = base.replaceFirst(RegExp(r'^https?://'), '');
+    }
+  }
+
+  /// 해시 + 이름으로 검색. [languages]는 'en,ko' 형식.
+  Future<List<SubtitleHit>> search({
+    String? hash,
+    required ReleaseName name,
+    required String languages,
+  }) async {
+    final hits = <SubtitleHit>[];
+    if (hash != null) {
+      hits.addAll(
+        SubtitleHit.fromSearchJson(
+          await _call(
+            'GET',
+            '/subtitles',
+            query: {'moviehash': hash, 'languages': languages},
+          ),
+        ),
+      );
+    }
+    // 해시로 원하는 언어를 다 못 찾았으면 이름 검색 결과를 더한다
+    final langs = languages.split(',');
+    if (langs.any((l) => !hits.any((h) => h.language == l && h.hashMatch))) {
+      hits.addAll(
+        SubtitleHit.fromSearchJson(
+          await _call(
+            'GET',
+            '/subtitles',
+            query: {
+              'query': name.title,
+              'languages': languages,
+              if (name.isEpisode) ...{
+                'type': 'episode',
+                'season_number': '${name.season}',
+                'episode_number': '${name.episode}',
+              } else if (name.year != null)
+                'year': '${name.year}',
+            },
+          ),
+        ),
+      );
+    }
+    return hits;
+  }
+
+  /// 자막 파일 내용(SRT)을 받는다. 다운로드 한도 1개 사용.
+  Future<String> download(int fileId) async {
+    await _login();
+    final j = await _call('POST', '/download', body: {'file_id': fileId});
+    final link = j['link'] as String?;
+    if (link == null) throw const OpenSubtitlesException('다운로드 링크를 받지 못했습니다');
+    debugPrint('OpenSubtitles download remaining: ${j['remaining']}');
+    final client = HttpClient();
+    try {
+      final res = await (await client.getUrl(Uri.parse(link))).close();
+      final bytes = await res.fold<List<int>>([], (a, b) => a..addAll(b));
+      try {
+        return utf8.decode(bytes);
+      } on FormatException {
+        return latin1.decode(bytes); // 오래된 자막은 UTF-8이 아닐 수 있다
+      }
+    } finally {
+      client.close();
+    }
+  }
+}

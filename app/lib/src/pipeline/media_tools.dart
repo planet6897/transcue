@@ -33,18 +33,29 @@ const _textCodecs = {
 };
 
 class MediaInfo {
-  const MediaInfo({required this.duration, required this.subtitles});
+  const MediaInfo({
+    required this.duration,
+    required this.subtitles,
+    this.audioLanguage,
+  });
 
   final Duration duration;
   final List<SubtitleStream> subtitles;
+
+  /// 첫 음성 트랙의 언어 태그 (예: eng)
+  final String? audioLanguage;
 
   /// ffprobe `-show_streams -show_format -of json` 결과 해석
   factory MediaInfo.fromProbeJson(Map<String, dynamic> j) {
     final secs =
         double.tryParse('${(j['format'] as Map?)?['duration'] ?? ''}') ?? 0;
     final subs = <SubtitleStream>[];
+    String? audioLang;
     var n = 0;
     for (final s in (j['streams'] as List? ?? []).cast<Map>()) {
+      if (s['codec_type'] == 'audio') {
+        audioLang ??= ((s['tags'] as Map?) ?? {})['language'] as String?;
+      }
       if (s['codec_type'] != 'subtitle') continue;
       final idx = n++;
       final codec = '${s['codec_name']}';
@@ -62,6 +73,7 @@ class MediaInfo {
     return MediaInfo(
       duration: Duration(milliseconds: (secs * 1000).round()),
       subtitles: subs,
+      audioLanguage: audioLang == 'und' ? null : audioLang,
     );
   }
 
