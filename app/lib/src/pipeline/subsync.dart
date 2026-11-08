@@ -187,13 +187,5 @@ List<BilingualCue> shiftCues(
     return Duration(milliseconds: math.max(0, ms));
   }
 
-  return [
-    for (final c in cues)
-      BilingualCue(
-        start: f(c.start),
-        end: f(c.end),
-        original: c.original,
-        translation: c.translation,
-      ),
-  ];
+  return [for (final c in cues) c.withTimes(f(c.start), f(c.end))];
 }

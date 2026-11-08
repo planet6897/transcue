@@ -15,6 +15,26 @@ enum ClaudeModel {
   final String costHint;
 }
 
+/// 학습 단어 수준: 이 수준에서 모를 만한 단어를 고른다
+enum VocabLevel {
+  beginner('초급', 'A2', 'knows only basic everyday words'),
+  intermediate(
+    '중급',
+    'B1',
+    'handles everyday conversation, misses less common words and idioms',
+  ),
+  advanced(
+    '고급',
+    'B2',
+    'understands most speech, wants rarer words, idioms and slang',
+  );
+
+  const VocabLevel(this.label, this.cefr, this.description);
+  final String label;
+  final String cefr;
+  final String description;
+}
+
 /// 로컬 음성 인식(whisper.cpp) 모델.
 enum WhisperModel {
   turbo(
@@ -45,7 +65,13 @@ class AppSettings {
     this.osApiKey = '',
     this.osUsername = '',
     this.osPassword = '',
+    this.showVocab = false,
+    this.vocabLevel = VocabLevel.intermediate,
   });
+
+  /// 학습 단어 표시 (켜져 있을 때만 단어를 만든다 — Claude 비용)
+  bool showVocab;
+  VocabLevel vocabLevel;
 
   String claudeApiKey;
   ClaudeModel claudeModel;
@@ -87,6 +113,11 @@ class AppSettings {
         osApiKey: j['osApiKey'] as String? ?? '',
         osUsername: j['osUsername'] as String? ?? '',
         osPassword: j['osPassword'] as String? ?? '',
+        showVocab: j['showVocab'] == true,
+        vocabLevel: VocabLevel.values.firstWhere(
+          (m) => m.name == j['vocabLevel'],
+          orElse: () => VocabLevel.intermediate,
+        ),
       );
     } catch (_) {
       return AppSettings();
@@ -103,6 +134,8 @@ class AppSettings {
         'osApiKey': osApiKey.trim(),
         'osUsername': osUsername.trim(),
         'osPassword': osPassword,
+        'showVocab': showVocab,
+        'vocabLevel': vocabLevel.name,
       }),
     );
     if (!Platform.isWindows) {

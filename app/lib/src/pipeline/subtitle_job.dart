@@ -237,7 +237,10 @@ class SubtitleJob extends ChangeNotifier {
         ? ' · 번역 완료'
         : ' · 번역 $t/$n';
     final sync = syncInfo == null ? '' : ' · $syncInfo';
-    return '자막 $n줄 ($originalFrom${_fromCache ? ' · 저장됨' : ''})$trans$sync';
+    final w = settings.showVocab && sourceLang != 'ko'
+        ? ' · 단어 ${cues.where((c) => c.words != null).length}/$n'
+        : '';
+    return '자막 $n줄 ($originalFrom${_fromCache ? ' · 저장됨' : ''})$trans$w$sync';
   }
 
   /// 내장 자막 또는 YouTube 자막. 찾으면 true.
@@ -649,6 +652,7 @@ class SubtitleJob extends ChangeNotifier {
 
   /// 번역 루프가 없으면 시작한다. 음성 인식 조각이 끝날 때마다 불린다.
   void _kickTranslation() {
+    kickVocab(); // 학습 단어도 같은 시점에 (켜져 있을 때만)
     if (_dbg('DUALCUE_NO_TRANSLATE')) return;
     if (_loop != null || !_needsTranslation) return;
     if (!settings.hasClaudeKey) {
@@ -733,5 +737,85 @@ class SubtitleJob extends ChangeNotifier {
       notice = '번역 중단: $e';
       if (!_disposed) notifyListeners();
     }
+  }
+
+  // ---- 학습 단어 (켜져 있을 때만, 재생 위치 근처부터) ----
+
+  Future<void>? _vocabLoop;
+  final _vocabAttempted = <String>{};
+
+  List<BilingualCue> _vocabPending() {
+    final ph = playhead().inMilliseconds - 5000;
+    final p = [
+      for (final c in cues)
+        if (c.words == null &&
+            !_vocabAttempted.contains(_key(c)) &&
+            _isFinal(c))
+          c,
+    ];
+    return [
+      ...p.where((c) => c.end.inMilliseconds >= ph),
+      ...p.where((c) => c.end.inMilliseconds < ph),
+    ];
+  }
+
+  /// 학습 단어 만들기를 시작한다 (설정에서 켰을 때도 호출).
+  void kickVocab() {
+    if (!settings.showVocab || sourceLang == 'ko') return;
+    if (_dbg('DUALCUE_NO_TRANSLATE')) return;
+    if (_vocabLoop != null || _vocabPending().isEmpty) return;
+    if (!settings.hasClaudeKey) {
+      notice = '설정(⚙)에서 Claude API 키를 등록하면 학습 단어가 표시됩니다';
+      if (!_disposed) notifyListeners();
+      return;
+    }
+    _vocabLoop = _vocabRun().whenComplete(() {
+      _vocabLoop = null;
+      if (!_disposed && stage == JobStage.done) _set(JobStage.done, _summary());
+    });
+  }
+
+  Future<void> _vocabRun() async {
+    final tr = ClaudeTranslator(
+      apiKey: settings.claudeApiKey,
+      model: settings.claudeModel,
+    );
+    try {
+      while (!_disposed && settings.showVocab) {
+        final pending = _vocabPending();
+        if (pending.isEmpty) return;
+        final near = (pending.first.start - playhead()).inSeconds.abs() < 30;
+        final batch = pending.take(near ? _nearBatchSize : _batchSize).toList();
+        final out = await tr.extractVocab(
+          VocabBatch(
+            sourceLang: sourceLang ?? 'auto',
+            items: {
+              for (var i = 0; i < batch.length; i++) i: batch[i].original,
+            },
+          ),
+          settings.vocabLevel,
+        );
+        final byKey = <String, List<VocabItem>>{
+          for (var i = 0; i < batch.length; i++)
+            if (out[i] != null) _key(batch[i]): out[i]!,
+        };
+        _vocabAttempted.addAll(batch.map(_key));
+        _setCues([
+          for (final c in cues)
+            if (byKey[_key(c)] case final w?) c.withWords(w) else c,
+        ]);
+        await _saveCache();
+      }
+    } on TranslateException catch (e) {
+      notice = '학습 단어 생성 중단: $e';
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  /// 학습 수준을 바꾸면 지금 영상의 단어를 새로 만든다
+  void resetVocab() {
+    _vocabAttempted.clear();
+    _setCues([for (final c in cues) c.words == null ? c : c.withWords(null)]);
+    kickVocab();
   }
 }

@@ -9,6 +9,13 @@ class DualSubtitleState extends ChangeNotifier {
   List<BilingualCue> _cues = const [];
   bool _showOriginal = true;
   bool _showTranslation = true;
+  bool _showVocab = false;
+
+  bool get showVocab => _showVocab;
+  set showVocab(bool v) {
+    _showVocab = v;
+    notifyListeners();
+  }
 
   List<BilingualCue> get cues => _cues;
   bool get showOriginal => _showOriginal;
@@ -66,6 +73,7 @@ class LiveDualSubtitle extends StatelessWidget {
             ),
             showOriginal: view.showOriginal,
             showTranslation: view.showTranslation,
+            showVocab: view.showVocab,
           ),
         ),
       ),
@@ -81,11 +89,15 @@ class DualSubtitleOverlay extends StatelessWidget {
     required this.cue,
     this.showOriginal = true,
     this.showTranslation = true,
+    this.showVocab = false,
   });
 
   final BilingualCue? cue;
   final bool showOriginal;
   final bool showTranslation;
+  final bool showVocab;
+
+  static const _vocabColor = Color(0xFF80DEEA);
 
   @override
   Widget build(BuildContext context) {
@@ -97,7 +109,10 @@ class DualSubtitleOverlay extends StatelessWidget {
         final h = box.maxHeight.isFinite ? box.maxHeight : 600.0;
         final size = (h * 0.038).clamp(16.0, 48.0);
         final shadow = [Shadow(blurRadius: size * 0.2, color: Colors.black)];
-        return Align(
+        final words = showVocab
+            ? (c.words ?? const <VocabItem>[])
+            : const <VocabItem>[];
+        final subtitle = Align(
           alignment: Alignment.bottomCenter,
           child: Padding(
             // 하단 재생 컨트롤 막대와 겹치지 않도록 여유를 둔다
@@ -120,8 +135,25 @@ class DualSubtitleOverlay extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (showOriginal)
-                    Text(
-                      c.original,
+                    Text.rich(
+                      TextSpan(
+                        children: [
+                          // 학습 단어는 원문에서 색으로 강조
+                          for (final (t, hl) in highlightSegments(c.original, [
+                            for (final w in words) w.text,
+                          ]))
+                            TextSpan(
+                              text: t,
+                              style: hl
+                                  ? const TextStyle(
+                                      color: _vocabColor,
+                                      decoration: TextDecoration.underline,
+                                      decorationColor: _vocabColor,
+                                    )
+                                  : null,
+                            ),
+                        ],
+                      ),
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: size,
@@ -147,7 +179,95 @@ class DualSubtitleOverlay extends StatelessWidget {
             ),
           ),
         );
+        if (words.isEmpty) return subtitle;
+        // 학습 단어: 화면 위쪽에 자막처럼
+        final vocab = Align(
+          alignment: Alignment.topCenter,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              24,
+              (h * 0.05).clamp(16.0, 60.0),
+              24,
+              0,
+            ),
+            child: Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: size * 0.5,
+                vertical: size * 0.25,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final w in words)
+                    Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: w.lemma,
+                            style: const TextStyle(
+                              color: _vocabColor,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          TextSpan(
+                            text: '  ${w.pos}  ',
+                            style: const TextStyle(color: Colors.white60),
+                          ),
+                          TextSpan(text: w.meaning),
+                        ],
+                      ),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: size * 0.72,
+                        color: Colors.white,
+                        shadows: shadow,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+        return Stack(children: [vocab, subtitle]);
       },
     );
   }
+}
+
+/// [line]을 강조할 부분과 나머지로 나눈다 (대소문자 무시, 겹치면 앞의 것 우선)
+List<(String, bool)> highlightSegments(String line, List<String> targets) {
+  final lower = line.toLowerCase();
+  final ranges = <(int, int)>[];
+  for (final t in targets) {
+    final k = t.trim().toLowerCase();
+    if (k.isEmpty) continue;
+    var from = 0;
+    while (true) {
+      final i = lower.indexOf(k, from);
+      if (i < 0) break;
+      final e = i + k.length;
+      // 단어 중간이 아닌 곳만 (예: "art"가 "start" 안에서 강조되지 않게)
+      bool letter(int j) =>
+          j >= 0 && j < line.length && RegExp(r'[A-Za-z]').hasMatch(line[j]);
+      if (!letter(i - 1) && !letter(e)) {
+        if (!ranges.any((r) => i < r.$2 && e > r.$1)) ranges.add((i, e));
+        break;
+      }
+      from = i + 1;
+    }
+  }
+  ranges.sort((a, b) => a.$1.compareTo(b.$1));
+  final out = <(String, bool)>[];
+  var p = 0;
+  for (final (a, b) in ranges) {
+    if (a > p) out.add((line.substring(p, a), false));
+    out.add((line.substring(a, b), true));
+    p = b;
+  }
+  if (p < line.length) out.add((line.substring(p), false));
+  return out;
 }

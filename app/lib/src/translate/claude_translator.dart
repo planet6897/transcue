@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../settings/app_settings.dart';
+import '../subtitle/bilingual_cue.dart';
 
 class TranslateException implements Exception {
   const TranslateException(this.message, {this.retryable = false});
@@ -59,6 +60,61 @@ const _schema = {
   'additionalProperties': false,
 };
 
+/// 학습 단어 추출 요청 한 묶음. id는 묶음 안 순번.
+class VocabBatch {
+  const VocabBatch({required this.sourceLang, required this.items});
+  final String sourceLang;
+  final Map<int, String> items;
+}
+
+String _vocabSystem(VocabLevel level) =>
+    '''
+You help a Korean learner study the source language while watching a video.
+The learner's level is ${level.cefr} (${level.description}).
+For each subtitle line, pick 0 to 2 words or short expressions (phrasal verbs, idioms, collocations)
+that this learner is likely not to know and that are worth learning.
+Rules:
+- Skip words the learner surely knows at this level, names of people/places, and sound tags.
+- "text": copy the word or expression exactly as it appears in the line (same spelling and case), so it can be highlighted.
+- "lemma": dictionary form (e.g. "abducted" → "abduct", "picked it up" → "pick up").
+- "pos": Korean part-of-speech abbreviation: 명, 동, 형, 부, 전, 접, 구(phrase/idiom).
+- "meaning": a short Korean meaning that fits THIS line's context, at most 12 characters.
+- Return every input id, with an empty "words" list when nothing is worth learning.
+- Output only the JSON object defined by the schema.''';
+
+const _vocabSchema = {
+  'type': 'object',
+  'properties': {
+    'items': {
+      'type': 'array',
+      'items': {
+        'type': 'object',
+        'properties': {
+          'id': {'type': 'integer'},
+          'words': {
+            'type': 'array',
+            'items': {
+              'type': 'object',
+              'properties': {
+                'text': {'type': 'string'},
+                'lemma': {'type': 'string'},
+                'pos': {'type': 'string'},
+                'meaning': {'type': 'string'},
+              },
+              'required': ['text', 'lemma', 'pos', 'meaning'],
+              'additionalProperties': false,
+            },
+          },
+        },
+        'required': ['id', 'words'],
+        'additionalProperties': false,
+      },
+    },
+  },
+  'required': ['items'],
+  'additionalProperties': false,
+};
+
 /// Claude Messages API (REST — Dart용 공식 SDK가 없어 직접 호출)
 class ClaudeTranslator implements Translator {
   ClaudeTranslator({required this.apiKey, required this.model});
@@ -97,6 +153,33 @@ class ClaudeTranslator implements Translator {
     };
   }
 
+  Map<String, Object?> _envelope(
+    String system,
+    Map<String, Object?> schema,
+    Object payload,
+  ) => {
+    'model': model.id,
+    'max_tokens': 16000,
+    'system': system,
+    'messages': [
+      {'role': 'user', 'content': jsonEncode(payload)},
+    ],
+    'output_config': {
+      'effort': 'low',
+      'format': {'type': 'json_schema', 'schema': schema},
+    },
+    if (model != ClaudeModel.haiku) 'fallbacks': 'default',
+  };
+
+  /// 학습 단어 요청 본문 (테스트용으로 분리)
+  Map<String, Object?> buildVocabBody(VocabBatch b, VocabLevel level) =>
+      _envelope(_vocabSystem(level), _vocabSchema, {
+        'source_language': b.sourceLang,
+        'items': [
+          for (final e in b.items.entries) {'id': e.key, 'text': e.value},
+        ],
+      });
+
   Map<String, String> get headers => {
     'content-type': 'application/json',
     'x-api-key': apiKey,
@@ -107,6 +190,39 @@ class ClaudeTranslator implements Translator {
 
   /// 응답 해석 (테스트용으로 분리)
   static Map<int, String> parseResponse(Map<String, dynamic> j) {
+    final out = _jsonOf(j);
+    return {
+      for (final t in (out['translations'] as List).cast<Map>())
+        (t['id'] as num).toInt(): (t['text'] as String).trim(),
+    };
+  }
+
+  /// 학습 단어 응답 해석. 자막에 실제로 없는 표현은 버린다 (강조 표시 불가).
+  static Map<int, List<VocabItem>> parseVocabResponse(
+    Map<String, dynamic> j,
+    Map<int, String> lines,
+  ) {
+    final out = _jsonOf(j);
+    final result = <int, List<VocabItem>>{};
+    for (final it in (out['items'] as List).cast<Map>()) {
+      final id = (it['id'] as num).toInt();
+      final line = (lines[id] ?? '').toLowerCase();
+      result[id] = [
+        for (final w in (it['words'] as List).cast<Map>())
+          if ('${w['text']}'.trim().isNotEmpty &&
+              line.contains('${w['text']}'.trim().toLowerCase()))
+            VocabItem(
+              text: '${w['text']}'.trim(),
+              lemma: '${w['lemma']}'.trim(),
+              pos: '${w['pos']}'.trim(),
+              meaning: '${w['meaning']}'.trim(),
+            ),
+      ].take(2).toList();
+    }
+    return result;
+  }
+
+  static Map<String, dynamic> _jsonOf(Map<String, dynamic> j) {
     final stop = j['stop_reason'];
     if (stop == 'refusal') {
       throw const TranslateException('Claude가 이 구간의 번역을 거절했습니다');
@@ -119,24 +235,33 @@ class ClaudeTranslator implements Translator {
         .where((c) => c['type'] == 'text')
         .map((c) => c['text'] as String)
         .join();
-    final Map<String, dynamic> out;
     try {
-      out = jsonDecode(text) as Map<String, dynamic>;
+      return jsonDecode(text) as Map<String, dynamic>;
     } on FormatException {
-      throw const TranslateException('번역 응답 형식 오류', retryable: true);
+      throw const TranslateException('응답 형식 오류', retryable: true);
     }
-    return {
-      for (final t in (out['translations'] as List).cast<Map>())
-        (t['id'] as num).toInt(): (t['text'] as String).trim(),
-    };
   }
 
   @override
-  Future<Map<int, String>> translate(TranslationBatch batch) async {
-    final body = jsonEncode(buildBody(batch));
+  Future<Map<int, String>> translate(TranslationBatch batch) =>
+      _request(jsonEncode(buildBody(batch)), parseResponse);
+
+  /// 학습 단어 추출 (줄 id → 단어 0~2개)
+  Future<Map<int, List<VocabItem>>> extractVocab(
+    VocabBatch batch,
+    VocabLevel level,
+  ) => _request(
+    jsonEncode(buildVocabBody(batch, level)),
+    (j) => parseVocabResponse(j, batch.items),
+  );
+
+  Future<T> _request<T>(
+    String body,
+    T Function(Map<String, dynamic>) parse,
+  ) async {
     for (var attempt = 0; ; attempt++) {
       try {
-        return await _post(body);
+        return parse(await _post(body));
       } on TranslateException catch (e) {
         if (!e.retryable || attempt >= 4) rethrow;
         await Future<void>.delayed(Duration(seconds: 2 << attempt));
@@ -147,7 +272,7 @@ class ClaudeTranslator implements Translator {
     }
   }
 
-  Future<Map<int, String>> _post(String body) async {
+  Future<Map<String, dynamic>> _post(String body) async {
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 30);
     try {
@@ -157,9 +282,7 @@ class ClaudeTranslator implements Translator {
       final res = await req.close().timeout(const Duration(minutes: 5));
       final text = await res.transform(utf8.decoder).join();
       final code = res.statusCode;
-      if (code == 200) {
-        return parseResponse(jsonDecode(text) as Map<String, dynamic>);
-      }
+      if (code == 200) return jsonDecode(text) as Map<String, dynamic>;
       String msg = text;
       try {
         msg = (jsonDecode(text) as Map)['error']['message'] as String;

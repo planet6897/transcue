@@ -54,6 +54,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
     AppSettings.load().then((s) {
       setState(() => _settings = s);
+      _view.showVocab = s.showVocab;
       // 개발용: DUALCUE_OPEN=<파일 경로> 로 실행하면 바로 연다 (실기기 자동 검증용)
       final auto = kDebugMode ? Platform.environment['DUALCUE_OPEN'] : null;
       if (auto != null && auto.isNotEmpty) {
@@ -208,6 +209,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _openSettings() async {
     final osBefore = _settings.osApiKey;
+    final levelBefore = _settings.vocabLevel;
     final saved = await showDialog<bool>(
       context: context,
       builder: (_) => SettingsDialog(settings: _settings),
@@ -218,6 +220,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // 키를 새로 넣었으면 지금 영상의 번역을 이어서 진행
     final job = _job;
     if (job == null) return;
+    if (_settings.vocabLevel != levelBefore) job.resetVocab();
     final finished = job.stage == JobStage.done || job.stage == JobStage.failed;
     // OpenSubtitles 키를 새로 넣었고 지금 자막이 음성 인식이면 인터넷 자막을 다시 찾는다
     if (finished &&
@@ -252,6 +255,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _nudge(const Duration(milliseconds: -200)),
     const SingleActivator(LogicalKeyboardKey.bracketRight): () =>
         _nudge(const Duration(milliseconds: 200)),
+    const SingleActivator(LogicalKeyboardKey.keyV): _toggleVocab,
     const SingleActivator(LogicalKeyboardKey.keyF): () =>
         _videoKey.currentState?.toggleFullscreen(),
     const SingleActivator(LogicalKeyboardKey.escape): () {
@@ -259,6 +263,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (v != null && v.isFullscreen()) v.exitFullscreen();
     },
   };
+
+  /// 학습 단어 켜기/끄기 (켜져 있을 때만 Claude로 단어를 만든다)
+  Future<void> _toggleVocab() async {
+    final on = !_settings.showVocab;
+    setState(() {
+      _settings.showVocab = on;
+      _view.showVocab = on;
+    });
+    await _settings.save();
+    if (on) _job?.kickVocab();
+    _toast(on ? '학습 단어 켜짐 (V)' : '학습 단어 꺼짐 (V)');
+  }
 
   Future<void> _nudge(Duration d) async {
     final job = _job;
@@ -317,6 +333,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       onPressed: () => setState(
                         () => _view.showTranslation = !_view.showTranslation,
                       ),
+                    ),
+                    IconButton(
+                      tooltip: '학습 단어 (V)',
+                      icon: Icon(
+                        _settings.showVocab
+                            ? Icons.school
+                            : Icons.school_outlined,
+                        color: _settings.showVocab
+                            ? const Color(0xFF80DEEA)
+                            : null,
+                      ),
+                      onPressed: _toggleVocab,
                     ),
                     IconButton(
                       tooltip: 'YouTube 열기',

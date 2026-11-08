@@ -84,17 +84,12 @@ List<BilingualCue> mergeTranslation(
 ) {
   return [
     for (final o in original)
-      BilingualCue(
-        start: o.start,
-        end: o.end,
-        original: o.original,
-        translation: () {
-          final hits = translation
-              .where((t) => o.contains(t.start + (t.end - t.start) ~/ 2))
-              .map((t) => t.original)
-              .toList();
-          return hits.isEmpty ? o.translation : hits.join(' ');
-        }(),
-      ),
+      o.withTranslation(() {
+        final hits = translation
+            .where((t) => o.contains(t.start + (t.end - t.start) ~/ 2))
+            .map((t) => t.original)
+            .toList();
+        return hits.isEmpty ? o.translation : hits.join(' ');
+      }()),
   ];
 }

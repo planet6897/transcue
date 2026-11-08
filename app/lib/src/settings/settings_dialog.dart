@@ -16,6 +16,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
   late final _key = TextEditingController(text: widget.settings.claudeApiKey);
   late ClaudeModel _claude = widget.settings.claudeModel;
   late WhisperModel _whisper = widget.settings.whisperModel;
+  late VocabLevel _level = widget.settings.vocabLevel;
   late final _osKey = TextEditingController(text: widget.settings.osApiKey);
   late final _osUser = TextEditingController(text: widget.settings.osUsername);
   late final _osPass = TextEditingController(text: widget.settings.osPassword);
@@ -35,6 +36,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       ..claudeApiKey = _key.text.trim()
       ..claudeModel = _claude
       ..whisperModel = _whisper
+      ..vocabLevel = _level
       ..osApiKey = _osKey.text.trim()
       ..osUsername = _osUser.text.trim()
       ..osPassword = _osPass.text;
@@ -95,6 +97,21 @@ class _SettingsDialogState extends State<SettingsDialog> {
               ),
               const SizedBox(height: 8),
               Text('처음 사용할 때 모델을 한 번 내려받습니다.', style: hint),
+              const SizedBox(height: 20),
+              DropdownButtonFormField<VocabLevel>(
+                initialValue: _level,
+                decoration: const InputDecoration(
+                  labelText: '학습 단어 수준 (V 키로 켜기/끄기)',
+                ),
+                items: [
+                  for (final l in VocabLevel.values)
+                    DropdownMenuItem(
+                      value: l,
+                      child: Text('${l.label} (${l.cefr})'),
+                    ),
+                ],
+                onChanged: (l) => setState(() => _level = l!),
+              ),
               const Divider(height: 36),
               Text(
                 '인터넷 자막 (OpenSubtitles.com)',
