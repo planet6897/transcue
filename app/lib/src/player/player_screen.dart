@@ -111,16 +111,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _toast('이 영상에는 자막이 없습니다 (STT 자막 생성은 M2에서 지원)');
       return;
     }
-    var cues = parseWebVtt(await fetchText(orig.url));
-    final ko = media.korean;
+    final cues = parseWebVtt(await _ytDlp.fetchCaption(media, orig));
+    _setCues(cues); // 원문부터 먼저 보여준다
+
+    var ko = media.korean;
     if (ko != null) {
-      cues = mergeTranslation(cues, parseWebVtt(await fetchText(ko.url)));
+      try {
+        final koCues = parseWebVtt(await _ytDlp.fetchCaption(media, ko));
+        _setCues(mergeTranslation(cues, koCues));
+      } on YtDlpException catch (e) {
+        debugPrint('Korean captions failed: $e');
+        ko = null; // 번역 실패해도 원문 자막으로 계속 학습 가능
+      }
     }
-    _setCues(cues);
 
     final src = orig.auto ? '자동 생성' : '제공';
     final trans = ko == null
-        ? '번역 없음 (AI 번역은 M3에서 지원)'
+        ? (media.korean == null
+              ? '번역 없음 (AI 번역은 M3에서 지원)'
+              : '한국어 자막을 받지 못함 (YouTube 요청 제한)')
         : (ko.auto ? 'YouTube 자동 번역' : '한국어 자막');
     _toast('자막: ${orig.lang} $src · $trans');
   }

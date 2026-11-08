@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'youtube_url.dart';
+
 /// yt-dlp가 알려준 자막 트랙 하나.
 class CaptionTrack {
   const CaptionTrack({
@@ -201,7 +203,7 @@ class YtDlp {
     return null;
   }
 
-  Future<YoutubeMedia> resolve(String url) async {
+  Future<String> _exe() async {
     final exe = await locate();
     if (exe == null) {
       throw const YtDlpException(
@@ -209,32 +211,77 @@ class YtDlp {
         'macOS: brew install yt-dlp\nWindows: winget install yt-dlp',
       );
     }
-    final r = await Process.run(exe, [
-      '-J',
+    return exe;
+  }
+
+  Future<String> _run(List<String> args) async {
+    final r = await Process.run(await _exe(), [
       '--no-playlist',
       '--no-warnings',
       '--no-cache-dir',
-      url,
+      ...args,
     ], stdoutEncoding: utf8);
     if (r.exitCode != 0) {
       throw YtDlpException('yt-dlp 실패: ${(r.stderr as String).trim()}');
     }
-    return YoutubeMedia.fromInfoJson(
-      jsonDecode(r.stdout as String) as Map<String, dynamic>,
-    );
+    return r.stdout as String;
   }
-}
 
-/// 자막 파일(VTT) 텍스트를 내려받는다.
-Future<String> fetchText(String url) async {
-  final client = HttpClient();
-  try {
-    final res = await (await client.getUrl(Uri.parse(url))).close();
-    if (res.statusCode != 200) {
-      throw HttpException('HTTP ${res.statusCode}', uri: Uri.parse(url));
+  Future<YoutubeMedia> resolve(String url) async {
+    final out = await _run(['-J', url]);
+    return YoutubeMedia.fromInfoJson(jsonDecode(out) as Map<String, dynamic>);
+  }
+
+  /// 자막을 VTT 텍스트로 받는다.
+  ///
+  /// 자막 URL을 직접 받지 않는 이유: YouTube 자동 번역 자막 등 일부 트랙은
+  /// VTT가 아니라 HLS 재생목록(m3u8)으로 내려온다. yt-dlp가 이를 처리해 준다.
+  ///
+  /// YouTube는 자막 요청이 몰리면 429를 돌려주므로 몇 초 쉬고 재시도한다.
+  Future<String> fetchCaption(
+    YoutubeMedia media,
+    CaptionTrack track, {
+    int retries = 2,
+    Duration backoff = const Duration(seconds: 4),
+  }) async {
+    for (var attempt = 0; ; attempt++) {
+      try {
+        return await _fetchCaptionOnce(media, track);
+      } on YtDlpException catch (e) {
+        if (attempt >= retries || !e.message.contains('429')) rethrow;
+        await Future<void>.delayed(backoff * (attempt + 1));
+      }
     }
-    return await res.transform(utf8.decoder).join();
-  } finally {
-    client.close();
+  }
+
+  Future<String> _fetchCaptionOnce(
+    YoutubeMedia media,
+    CaptionTrack track,
+  ) async {
+    final dir = await Directory.systemTemp.createTemp('dualcue_sub_');
+    try {
+      await _run([
+        '--skip-download',
+        track.auto ? '--write-auto-subs' : '--write-subs',
+        '--sub-langs',
+        track.lang,
+        '--sub-format',
+        'vtt',
+        '-o',
+        '${dir.path}${Platform.pathSeparator}sub',
+        youtubeWatchUrl(media.id),
+      ]);
+      final file = await dir
+          .list()
+          .where((e) => e is File && e.path.endsWith('.vtt'))
+          .cast<File?>()
+          .firstWhere((_) => true, orElse: () => null);
+      if (file == null) {
+        throw YtDlpException('자막(${track.lang})을 받지 못했습니다');
+      }
+      return await file.readAsString();
+    } finally {
+      await dir.delete(recursive: true);
+    }
   }
 }
