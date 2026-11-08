@@ -469,42 +469,48 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// - 가운데: ⏪10초 · 재생/일시정지 · 10초⏩
   /// - 아래: 시간 / 슬라이드 바 / 전체 화면
   /// - 왼쪽·오른쪽 두 번 탭: ±10초, 가로로 밀기: 이동
-  late final _touchTheme = MaterialVideoControlsThemeData(
-    backdropColor: const Color(0x80000000),
-    seekOnDoubleTap: true,
-    seekGesture: true,
-    displaySeekBar: true,
-    controlsHoverDuration: const Duration(seconds: 4),
-    primaryButtonBar: [
-      const Spacer(flex: 2),
-      MaterialCustomButton(
-        icon: const Icon(Icons.replay_10),
-        iconSize: 44,
-        onPressed: () => _seekBy(const Duration(seconds: -10)),
-      ),
-      const Spacer(),
-      const MaterialPlayOrPauseButton(iconSize: 72),
-      const Spacer(),
-      MaterialCustomButton(
-        icon: const Icon(Icons.forward_10),
-        iconSize: 44,
-        onPressed: () => _seekBy(const Duration(seconds: 10)),
-      ),
-      const Spacer(flex: 2),
-    ],
-    bottomButtonBar: const [
-      MaterialPositionIndicator(),
-      Spacer(),
-      MaterialFullscreenButton(),
-    ],
-    buttonBarButtonSize: 28,
-    seekBarMargin: const EdgeInsets.symmetric(horizontal: 16),
-    seekBarHeight: 4,
-    seekBarContainerHeight: 40, // 손가락으로 잡기 쉽게
-    seekBarThumbSize: 16,
-    seekBarPositionColor: const Color(0xFF80DEEA),
-    seekBarThumbColor: const Color(0xFF80DEEA),
-  );
+  late final _touchTheme = _touchControls(bottom: 8);
+
+  /// 전체 화면: 화면 맨 아래는 시스템 제스처(위로 밀어 홈) 영역이라 슬라이드 바를 더 올린다
+  late final _touchFullscreenTheme = _touchControls(bottom: 36);
+
+  MaterialVideoControlsThemeData _touchControls({required double bottom}) =>
+      MaterialVideoControlsThemeData(
+        backdropColor: const Color(0x80000000),
+        seekOnDoubleTap: true,
+        seekGesture: true,
+        displaySeekBar: true,
+        controlsHoverDuration: const Duration(seconds: 4),
+        primaryButtonBar: [
+          const Spacer(flex: 2),
+          MaterialCustomButton(
+            icon: const Icon(Icons.replay_10),
+            iconSize: 44,
+            onPressed: () => _seekBy(const Duration(seconds: -10)),
+          ),
+          const Spacer(),
+          const MaterialPlayOrPauseButton(iconSize: 72),
+          const Spacer(),
+          MaterialCustomButton(
+            icon: const Icon(Icons.forward_10),
+            iconSize: 44,
+            onPressed: () => _seekBy(const Duration(seconds: 10)),
+          ),
+          const Spacer(flex: 2),
+        ],
+        bottomButtonBar: const [
+          MaterialPositionIndicator(),
+          Spacer(),
+          MaterialFullscreenButton(),
+        ],
+        buttonBarButtonSize: 28,
+        seekBarMargin: EdgeInsets.fromLTRB(16, 0, 16, bottom),
+        seekBarHeight: 4,
+        seekBarContainerHeight: 40, // 손가락으로 잡기 쉽게
+        seekBarThumbSize: 16,
+        seekBarPositionColor: const Color(0xFF80DEEA),
+        seekBarThumbColor: const Color(0xFF80DEEA),
+      );
 
   static final bool _touch = Platform.isAndroid || Platform.isIOS;
 
@@ -616,7 +622,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 // media_kit 내장 자막 렌더링은 끄고 자체 오버레이를 사용한다.
                 MaterialVideoControlsTheme(
                   normal: _touchTheme,
-                  fullscreen: _touchTheme,
+                  fullscreen: _touchFullscreenTheme,
                   child: MaterialDesktopVideoControlsTheme(
                     normal: _controlsTheme,
                     fullscreen: _controlsTheme,

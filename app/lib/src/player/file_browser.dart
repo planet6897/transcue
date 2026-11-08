@@ -68,15 +68,21 @@ class _FileBrowserState extends State<_FileBrowser> {
       all = const [];
     }
     String name(FileSystemEntity e) => e.path.split('/').last;
-    final dirs =
-        all
-            .whereType<Directory>()
-            .where((d) => !name(d).startsWith('.'))
-            .toList()
-          ..sort((a, b) => naturalCompare(name(a), name(b)));
-    final files =
-        all.whereType<File>().where((f) => isVideoFile(name(f))).toList()
-          ..sort((a, b) => naturalCompare(name(a), name(b)));
+    // Android 저장소(FUSE)는 항목 종류를 알려 주지 않을 때가 있어(DT_UNKNOWN)
+    // listSync 결과 타입만 믿으면 Movies 같은 폴더가 빠진다 → 직접 확인
+    final dirs = <Directory>[];
+    final files = <File>[];
+    for (final e in all) {
+      final n = name(e);
+      if (n.startsWith('.')) continue;
+      if (FileSystemEntity.isDirectorySync(e.path)) {
+        dirs.add(Directory(e.path));
+      } else if (isVideoFile(n)) {
+        files.add(File(e.path));
+      }
+    }
+    dirs.sort((a, b) => naturalCompare(name(a), name(b)));
+    files.sort((a, b) => naturalCompare(name(a), name(b)));
     setState(() => _items = [...dirs, ...files]);
   }
 
