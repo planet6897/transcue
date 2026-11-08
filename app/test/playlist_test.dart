@@ -19,7 +19,9 @@ void main() {
 
   group('neighborVideo (실제 폴더)', () {
     late Directory root;
-    String p(String rel) => '${root.path}/$rel';
+    // 운영체제 구분자로 (Windows: \)
+    String p(String rel) =>
+        [root.path, ...rel.split('/')].join(Platform.pathSeparator);
     setUp(() {
       root = Directory.systemTemp.createTempSync('dualcue_pl');
       for (final f in [

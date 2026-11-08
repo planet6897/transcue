@@ -36,9 +36,19 @@ String? neighborName(List<String> names, String current, int delta) {
 
 String _sep() => Platform.pathSeparator;
 
-String _name(String path) => path.substring(path.lastIndexOf(_sep()) + 1);
+/// 마지막 구분자 위치. Windows는 `\` 와 `/` 를 모두 쓸 수 있다.
+int _lastSep(String path) {
+  final a = path.lastIndexOf('/');
+  final b = Platform.isWindows ? path.lastIndexOf(r'\') : -1;
+  return a > b ? a : b;
+}
 
-String _parent(String path) => path.substring(0, path.lastIndexOf(_sep()));
+String _name(String path) => path.substring(_lastSep(path) + 1);
+
+String _parent(String path) {
+  final i = _lastSep(path);
+  return i < 0 ? '' : path.substring(0, i);
+}
 
 List<String> _list(String dir, {required bool dirs}) {
   try {
