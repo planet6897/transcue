@@ -12,7 +12,7 @@ import 'whisper.dart';
 /// (데스크톱: ffmpeg + whisper-cli, Android: 앱에 내장한 whisper.cpp)
 final bool canTranscribe = hasDesktopTools || Platform.isAndroid;
 
-const _channel = MethodChannel('dualcue/whisper');
+const _channel = MethodChannel('transcue/whisper');
 
 /// 영상 [input]의 [start]부터 [length]만큼 받아 적는다.
 /// 큐 시간은 [start] 기준(0부터). 소리가 없으면(영상 끝) [SttEnd].

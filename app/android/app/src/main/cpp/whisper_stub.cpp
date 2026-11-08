@@ -2,7 +2,7 @@
 #include <jni.h>
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_io_github_planet6897_dualcue_WhisperBridge_nativeTranscribe(
+Java_com_transcue_app_WhisperBridge_nativeTranscribe(
     JNIEnv *, jobject, jstring, jstring, jstring, jint, jfloatArray) {
   return nullptr;
 }

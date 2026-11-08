@@ -22,7 +22,7 @@ std::string str(JNIEnv *env, jstring s) {
 
 // 반환: UTF-8 바이트. 첫 줄 = 언어 코드, 이후 "시작ms\t끝ms\t문장" 줄들. 실패 시 null.
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_io_github_planet6897_dualcue_WhisperBridge_nativeTranscribe(
+Java_com_transcue_app_WhisperBridge_nativeTranscribe(
     JNIEnv *env, jobject, jstring jmodel, jstring jvad, jstring jlang,
     jint threads, jfloatArray jpcm) {
   std::lock_guard<std::mutex> lock(g_mu);

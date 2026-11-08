@@ -15,7 +15,7 @@ Future<String?> pickVideoOnAndroid(
   String? startDir,
 }) async {
   // Android 13+: 동영상 권한, 12 이하: 저장소 읽기 권한 (MainActivity.kt)
-  const ch = MethodChannel('dualcue/permission');
+  const ch = MethodChannel('transcue/permission');
   final granted = await ch.invokeMethod<bool>('requestVideo') ?? false;
   if (!granted) {
     if (context.mounted) {

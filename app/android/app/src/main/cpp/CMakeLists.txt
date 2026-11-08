@@ -1,6 +1,6 @@
 # 기기 안 음성 인식: whisper.cpp (데스크톱 Homebrew와 같은 1.9.5)
 cmake_minimum_required(VERSION 3.22.1)
-project(dualcue_whisper C CXX)
+project(transcue_whisper C CXX)
 
 # 디버그 빌드여도 최적화 (안 하면 인식이 수십 배 느림)
 set(CMAKE_C_FLAGS_DEBUG "-O3 -DNDEBUG")
@@ -8,7 +8,7 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O3 -DNDEBUG")
 
 # 64비트 ARM만 실제 인식. 다른 ABI(32비트·x86 에뮬레이터)는 빈 구현(인식 불가)으로
 if(NOT ANDROID_ABI STREQUAL "arm64-v8a")
-  add_library(dualcue_whisper SHARED whisper_stub.cpp)
+  add_library(transcue_whisper SHARED whisper_stub.cpp)
   return()
 endif()
 
@@ -29,5 +29,5 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(whisper)
 
-add_library(dualcue_whisper SHARED whisper_jni.cpp)
-target_link_libraries(dualcue_whisper whisper log)
+add_library(transcue_whisper SHARED whisper_jni.cpp)
+target_link_libraries(transcue_whisper whisper log)

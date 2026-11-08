@@ -1,4 +1,4 @@
-package io.github.planet6897.dualcue
+package com.transcue.app
 
 import android.media.AudioFormat
 import android.media.MediaCodec
@@ -18,8 +18,8 @@ class WhisperBridge(messenger: BinaryMessenger) {
     private val main = Handler(Looper.getMainLooper())
 
     init {
-        System.loadLibrary("dualcue_whisper")
-        MethodChannel(messenger, "dualcue/whisper").setMethodCallHandler { call, result ->
+        System.loadLibrary("transcue_whisper")
+        MethodChannel(messenger, "transcue/whisper").setMethodCallHandler { call, result ->
             if (call.method != "transcribe") return@setMethodCallHandler result.notImplemented()
             val path = call.argument<String>("path")!!
             val startMs = (call.argument<Number>("startMs")!!).toLong()

@@ -1,4 +1,4 @@
-package io.github.planet6897.dualcue
+package com.transcue.app
 
 import android.Manifest
 import android.content.Intent
@@ -25,7 +25,7 @@ class MainActivity : FlutterActivity() {
         WhisperBridge(flutterEngine.dartExecutor.binaryMessenger)
         // 화면 위/아래로 밀어 소리 조절: 기기 미디어 음량 (볼륨 버튼과 같은 값, 0~1)
         val audio = getSystemService(AUDIO_SERVICE) as AudioManager
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dualcue/volume")
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "transcue/volume")
             .setMethodCallHandler { call, result ->
                 val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                 when (call.method) {
@@ -44,7 +44,7 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dualcue/permission")
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "transcue/permission")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "requestVideo" -> {

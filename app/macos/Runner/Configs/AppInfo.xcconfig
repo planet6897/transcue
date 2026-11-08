@@ -8,7 +8,7 @@
 PRODUCT_NAME = Transcue
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = io.github.planet6897.dualcue
+PRODUCT_BUNDLE_IDENTIFIER = com.transcue.app
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 io.github.planet6897. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 Transcue. All rights reserved.

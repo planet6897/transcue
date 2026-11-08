@@ -13,7 +13,7 @@ class VolumeDragLayer extends StatefulWidget {
 }
 
 class _VolumeDragLayerState extends State<VolumeDragLayer> {
-  static const _ch = MethodChannel('dualcue/volume');
+  static const _ch = MethodChannel('transcue/volume');
 
   double? _volume; // 표시 중일 때만 값이 있다
   double _target = 0;
