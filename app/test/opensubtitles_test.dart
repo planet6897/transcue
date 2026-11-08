@@ -104,18 +104,82 @@ void main() {
       int? season,
       int? episode,
       bool hash = false,
+      String release = '',
+      int? year,
     }) => SubtitleHit(
       fileId: 1,
       language: 'en',
       hashMatch: hash,
       downloads: 0,
       machine: false,
-      release: '',
+      release: release,
       title: title,
       parentTitle: parent,
       season: season,
       episode: episode,
+      year: year,
     );
+
+    group('연도 (리메이크 구분)', () {
+      const path =
+          '/TV/Knight Rider (1982)/Season 1/Knight Rider S01E03 Not a Drop to Drink.mkv';
+      final name = parseReleaseName(path);
+      test('폴더 이름에서 연도', () => expect(name.year, 1982));
+      test('실사례: 2008 리메이크 자막은 제외 (릴리스 이름)', () {
+        expect(
+          matchesRelease(
+            hit(
+              parent: 'Knight Rider',
+              season: 1,
+              episode: 3,
+              release:
+                  'Knight.Rider.2008.S01E03.Knight.of.the.Iguana.1080p.AMZN.WEB-DL',
+            ),
+            name,
+          ),
+          isFalse,
+        );
+      });
+      test('실사례: 릴리스에 연도가 없어도 방영 연도로 제외', () {
+        expect(
+          matchesRelease(
+            hit(
+              parent: 'Knight Rider',
+              season: 1,
+              episode: 3,
+              release: '01x03',
+              year: 2008,
+            ),
+            name,
+          ),
+          isFalse,
+        );
+      });
+      test('원작 자막은 통과 (방영 연도 1982)', () {
+        expect(
+          matchesRelease(
+            hit(parent: 'Knight Rider', season: 1, episode: 3, year: 1982),
+            name,
+          ),
+          isTrue,
+        );
+      });
+      test('후반 시즌은 첫 방영보다 늦은 연도여도 통과', () {
+        final s4 = parseReleaseName(
+          '/TV/Knight Rider (1982)/Season 4/Knight Rider S04E02.mkv',
+        );
+        expect(
+          matchesRelease(
+            hit(parent: 'Knight Rider', season: 4, episode: 2, year: 1985),
+            s4,
+          ),
+          isTrue,
+        );
+      });
+      test('1080p 같은 숫자는 연도로 보지 않음', () {
+        expect(parseReleaseName('/x/Show S01E01.1080p.mkv').year, isNull);
+      });
+    });
 
     test('real case: different show with overlapping words is rejected', () {
       final name = parseReleaseName(

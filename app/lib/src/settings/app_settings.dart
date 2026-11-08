@@ -67,7 +67,11 @@ class AppSettings {
     this.osPassword = '',
     this.showVocab = false,
     this.vocabLevel = VocabLevel.intermediate,
+    this.autoPlayNext = true,
   });
+
+  /// 연속 재생: 영상이 끝나면 같은 폴더의 다음 영상을 연다
+  bool autoPlayNext;
 
   /// 학습 단어 표시 (켜져 있을 때만 단어를 만든다 — Claude 비용)
   bool showVocab;
@@ -118,6 +122,7 @@ class AppSettings {
           (m) => m.name == j['vocabLevel'],
           orElse: () => VocabLevel.intermediate,
         ),
+        autoPlayNext: j['autoPlayNext'] != false,
       );
     } catch (_) {
       return AppSettings();
@@ -136,6 +141,7 @@ class AppSettings {
         'osPassword': osPassword,
         'showVocab': showVocab,
         'vocabLevel': vocabLevel.name,
+        'autoPlayNext': autoPlayNext,
       }),
     );
     if (!Platform.isWindows) {

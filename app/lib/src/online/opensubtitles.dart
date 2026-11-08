@@ -55,12 +55,20 @@ String _cleanTitle(String s) => s
 /// `Knight Rider S01E01-E02 Knight of the Phoenix.mkv` → Knight Rider, S1E1
 /// `The.Matrix.1999.1080p.BluRay.mkv` → The Matrix (1999)
 ReleaseName parseReleaseName(String path) {
-  var name = path.split(RegExp(r'[/\\]')).last;
+  final parts = path.split(RegExp(r'[/\\]'));
+  var name = parts.last;
   name = name.replaceFirst(RegExp(r'\.[A-Za-z0-9]{2,4}$'), '');
   final ep = _episodeRe.firstMatch(name);
   if (ep != null && _cleanTitle(ep[1]!).isNotEmpty) {
+    // 드라마 연도: 파일 이름(Show.2008.S01E01) 또는 폴더 이름(Show (1982)/Season 1)
+    // 같은 제목의 리메이크(Knight Rider 1982 ↔ 2008)를 가르는 데 쓴다
+    int? year = _yearOf(ep[1]!);
+    for (final dir in parts.reversed.skip(1).take(3)) {
+      year ??= _yearOf(dir);
+    }
     return ReleaseName(
       title: _cleanTitle(ep[1]!),
+      year: year,
       season: int.parse(ep[2]!),
       episode: int.parse(ep[3]!),
     );
@@ -70,6 +78,15 @@ ReleaseName parseReleaseName(String path) {
     return ReleaseName(title: _cleanTitle(y[1]!), year: int.parse(y[2]!));
   }
   return ReleaseName(title: _cleanTitle(name));
+}
+
+final _anyYearRe = RegExp(
+  r'(?:^|[\s._\-\[(])((?:19|20)\d{2})(?=[\s._\-\])]|$)',
+);
+
+int? _yearOf(String s) {
+  final m = _anyYearRe.firstMatch(s);
+  return m == null ? null : int.parse(m[1]!);
 }
 
 /// 검색 결과 하나 (자막 파일 하나)
@@ -85,7 +102,11 @@ class SubtitleHit {
     this.parentTitle = '',
     this.season,
     this.episode,
+    this.year,
   });
+
+  /// 작품(에피소드) 연도 (feature_details.year)
+  final int? year;
 
   /// 자막이 속한 작품 정보 (feature_details) — 이름 검색 결과 검증용
   final String title;
@@ -123,6 +144,7 @@ class SubtitleHit {
           parentTitle: '${f['parent_title'] ?? ''}',
           season: (f['season_number'] as num?)?.toInt(),
           episode: (f['episode_number'] as num?)?.toInt(),
+          year: (f['year'] as num?)?.toInt() ?? int.tryParse('${f['year']}'),
         ),
       );
     }
@@ -156,10 +178,26 @@ bool matchesRelease(SubtitleHit h, ReleaseName name) {
     titleSimilarity(name.title, h.parentTitle),
   ].reduce((a, b) => a > b ? a : b);
   if (sim < 0.6) return false;
+  if (!_yearFits(h, name)) return false;
   if (name.isEpisode && (h.season != null || h.episode != null)) {
     return h.season == name.season && h.episode == name.episode;
   }
   return true;
+}
+
+/// 연도 검사: 같은 제목의 다른 작품(리메이크) 걸러내기.
+/// (실사례: Knight Rider (1982) S01E03 → Knight.Rider.2008.S01E03 자막)
+bool _yearFits(SubtitleHit h, ReleaseName name) {
+  final want = name.year;
+  if (want == null) return true;
+  // 릴리스 이름에 박힌 연도(Show.2008.S01E03)는 작품 연도 → 거의 같아야 한다
+  final rel = _yearOf(h.release);
+  if (rel != null && (rel - want).abs() > 1) return false;
+  final y = h.year;
+  if (y == null) return true;
+  if (!name.isEpisode) return (y - want).abs() <= 1;
+  // 드라마: 에피소드 방영 연도는 시즌이 지날수록 늦어진다 (첫 방영 연도 ~ +시즌 수)
+  return y >= want - 1 && y <= want + name.season! + 1;
 }
 
 /// 해당 언어에서 가장 좋은 자막: 해시 일치 > 사람 번역 > 다운로드 수

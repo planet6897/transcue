@@ -14,6 +14,7 @@ import '../settings/settings_dialog.dart';
 import '../source/youtube_url.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
+import 'playlist.dart';
 
 /// 플레이어 화면: 로컬 파일 / YouTube 재생 + 이중 자막 오버레이.
 /// 영상을 열면 [SubtitleJob]이 자막 확보(캐시·내장·YouTube·STT)와 번역을 진행한다.
@@ -42,6 +43,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   String _title = 'DualCue';
   bool _loading = false;
 
+  /// 지금 재생 중인 로컬 파일 (YouTube면 null) — 연속 재생 기준
+  String? _currentPath;
+  StreamSubscription<bool>? _completedSub;
+
   @override
   void initState() {
     super.initState();
@@ -52,6 +57,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
         (l) => debugPrint('[mpv] ${l.prefix}: ${l.text}'),
       );
     }
+    _completedSub = _player.stream.completed.listen((done) {
+      if (done) _onCompleted();
+    });
     AppSettings.load().then((s) {
       setState(() => _settings = s);
       _view.showVocab = s.showVocab;
@@ -69,6 +77,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    _completedSub?.cancel();
     _job?.dispose();
     _view.dispose();
     _player.dispose();
@@ -127,7 +136,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Future<void> _openPath(String path) async {
-    setState(() => _title = path.split(Platform.pathSeparator).last);
+    setState(() {
+      _title = path.split(Platform.pathSeparator).last;
+      _currentPath = path;
+    });
+    if (kDebugMode) debugPrint('[open] $path');
     await _player.open(Media(path));
     _startJob(LocalFileSource(path));
     if (kDebugMode) unawaited(_debugAutoplay());
@@ -186,7 +199,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() => _loading = true);
     try {
       final media = await _ytDlp.resolve(youtubeWatchUrl(id));
-      setState(() => _title = media.title);
+      setState(() {
+        _title = media.title;
+        _currentPath = null;
+      });
       // 고화질은 영상/소리가 따로 온다. 소리는 영상이 실제로 로드된 뒤에 붙여야 한다
       // (open()은 로드 완료 전에 반환되고, 그 사이 mpv audio-add는 조용히 실패함)
       final loaded = _player.stream.duration
@@ -205,6 +221,40 @@ class _PlayerScreenState extends State<PlayerScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// 영상이 끝났을 때: 연속 재생이 켜져 있으면 다음 영상
+  void _onCompleted() {
+    final path = _currentPath;
+    if (!_settings.autoPlayNext || path == null) return;
+    final next = neighborVideo(path);
+    if (next == null) {
+      _toast('마지막 영상입니다');
+      return;
+    }
+    _toast('다음 영상: ${next.split(Platform.pathSeparator).last}');
+    // 끝 화면을 잠깐 보여 준 뒤 넘어간다. 그 사이 사용자가 다른 영상을 열었으면 취소
+    Future<void>.delayed(const Duration(milliseconds: 1500), () {
+      if (mounted && _currentPath == path) _openPath(next);
+    });
+  }
+
+  /// 이전/다음 영상으로 이동 (P / N)
+  void _skip(int delta) {
+    final path = _currentPath;
+    if (path == null) return;
+    final target = neighborVideo(path, delta: delta);
+    if (target == null) {
+      _toast(delta > 0 ? '다음 영상이 없습니다' : '이전 영상이 없습니다');
+      return;
+    }
+    _openPath(target);
+  }
+
+  Future<void> _toggleAutoPlayNext() async {
+    setState(() => _settings.autoPlayNext = !_settings.autoPlayNext);
+    await _settings.save();
+    _toast(_settings.autoPlayNext ? '연속 재생 켜짐' : '연속 재생 꺼짐');
   }
 
   Future<void> _openSettings() async {
@@ -256,6 +306,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
     const SingleActivator(LogicalKeyboardKey.bracketRight): () =>
         _nudge(const Duration(milliseconds: 200)),
     const SingleActivator(LogicalKeyboardKey.keyV): _toggleVocab,
+    // 이전/다음 영상
+    const SingleActivator(LogicalKeyboardKey.keyN): () => _skip(1),
+    const SingleActivator(LogicalKeyboardKey.keyP): () => _skip(-1),
+    const SingleActivator(LogicalKeyboardKey.mediaTrackNext): () => _skip(1),
+    const SingleActivator(LogicalKeyboardKey.mediaTrackPrevious): () =>
+        _skip(-1),
     const SingleActivator(LogicalKeyboardKey.keyF): () =>
         _videoKey.currentState?.toggleFullscreen(),
     const SingleActivator(LogicalKeyboardKey.escape): () {
@@ -345,6 +401,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             : null,
                       ),
                       onPressed: _toggleVocab,
+                    ),
+                    IconButton(
+                      tooltip: '이전 영상 (P)',
+                      icon: const Icon(Icons.skip_previous),
+                      onPressed: _currentPath == null ? null : () => _skip(-1),
+                    ),
+                    IconButton(
+                      tooltip: '다음 영상 (N)',
+                      icon: const Icon(Icons.skip_next),
+                      onPressed: _currentPath == null ? null : () => _skip(1),
+                    ),
+                    IconButton(
+                      tooltip: _settings.autoPlayNext ? '연속 재생 켜짐' : '연속 재생 꺼짐',
+                      icon: Icon(
+                        _settings.autoPlayNext
+                            ? Icons.playlist_play
+                            : Icons.playlist_remove,
+                        color: _settings.autoPlayNext
+                            ? const Color(0xFF80DEEA)
+                            : null,
+                      ),
+                      onPressed: _toggleAutoPlayNext,
                     ),
                     IconButton(
                       tooltip: 'YouTube 열기',

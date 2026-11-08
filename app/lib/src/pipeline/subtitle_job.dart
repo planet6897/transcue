@@ -152,6 +152,7 @@ class SubtitleJob extends ChangeNotifier {
         'from': originalFrom,
         'osTried': _osTried,
         'sync': ?syncInfo,
+        'release': ?_release,
         // 음성 인식 중간 저장: 다시 열면 남은 구간만 이어서 인식
         'complete': _sttDone || originalFrom != fromStt,
         if (originalFrom == fromStt)
@@ -174,6 +175,14 @@ class SubtitleJob extends ChangeNotifier {
       originalFrom = '${j['from'] ?? '저장된 자막'}';
       _osTried = j['osTried'] == true;
       syncInfo = j['sync'] as String?;
+      _release = j['release'] as String?;
+      // 이름 검색으로 받은 예전 결과는 연도 검사 전이라 다시 확인한다
+      if (originalFrom == _fromNameSearch && _release == null) {
+        debugPrint(
+          'cache rejected: name-search subtitles saved before year check',
+        );
+        return false;
+      }
       _complete = j['complete'] != false;
       final saved = [
         for (final c in (j['cues'] as List).cast<Map<String, dynamic>>())
@@ -325,6 +334,11 @@ class SubtitleJob extends ChangeNotifier {
   /// 원어 자막을 인터넷에서 가져왔는지
   bool _onlineOriginal = false;
 
+  static const _fromNameSearch = 'OpenSubtitles · 이름 검색';
+
+  /// 받은 인터넷 자막의 릴리스 이름 (저장 결과 검증용)
+  String? _release;
+
   // ---- 싱크 ----
 
   /// 사용자가 [ ] 키로 옮긴 누적 시간
@@ -455,9 +469,10 @@ class SubtitleJob extends ChangeNotifier {
       _onlineKorean = koCues;
       if (koCues != null) c = mergeTranslation(c, koCues);
       sourceLang = lang.split('-').first;
+      _release = origHit.release;
       originalFrom = origHit.hashMatch
           ? 'OpenSubtitles · 파일 일치'
-          : 'OpenSubtitles · 이름 검색';
+          : _fromNameSearch;
       _setCues(c);
       return true;
     } on Exception catch (e) {
