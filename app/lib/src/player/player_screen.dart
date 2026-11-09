@@ -160,6 +160,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
               ? _openYoutubeUrl(auto)
               : _openPath(auto),
         );
+      } else {
+        unawaited(_showRecentOnStart());
       }
     });
   }
@@ -437,6 +439,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _rememberRecent(String source, String title) async =>
       (await _recentStore()).add(source, title);
+
+  /// 앱을 켜면 최근 재생목록을 바로 띄운다 (목록이 비어 있으면 띄우지 않는다)
+  Future<void> _showRecentOnStart() async {
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _opened) return;
+    if ((await (await _recentStore()).list()).isNotEmpty) await _showRecent();
+  }
 
   /// 최근 재생목록을 보여 주고 고른 영상을 연다
   Future<void> _showRecent() async {
