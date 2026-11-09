@@ -88,6 +88,7 @@ SyncResult findBestSync(
   List<BilingualCue> cues,
   List<(int, int)> speech, {
   Duration maxOffset = const Duration(minutes: 2),
+  List<double> scales = _scales,
 }) {
   final total = cues.fold<double>(
     0,
@@ -147,7 +148,7 @@ SyncResult findBestSync(
   final base = score(1, 0);
   var best = (scale: 1.0, offset: 0, score: base);
   final maxOff = maxOffset.inMilliseconds;
-  for (final sc in _scales) {
+  for (final sc in scales) {
     // 1단계: 100ms 간격으로 넓게
     var local = (offset: 0, score: double.negativeInfinity);
     for (var off = -maxOff; off <= maxOff; off += 100) {
@@ -170,6 +171,59 @@ SyncResult findBestSync(
     baseScore: base,
     total: total,
   );
+}
+
+/// 짧은 구간의 어긋남을 잰다. 믿을 만한 차이가 없으면 null.
+/// [cues]와 [speech]는 같은 구간을 기준으로 한 상대 시간이어야 한다.
+Duration? estimateLocalOffset(
+  List<BilingualCue> cues,
+  List<(int, int)> speech, {
+  Duration maxOffset = const Duration(seconds: 4),
+}) {
+  if (cues.length < 3) return null;
+  final r = findBestSync(
+    cues,
+    speech,
+    maxOffset: maxOffset,
+    scales: const [1.0],
+  );
+  if (r.offset.inMilliseconds.abs() < 300) return null;
+  if (r.score - r.baseScore <= r.total * 0.08) return null;
+  return r.offset;
+}
+
+/// 실시간 보정 판단: 잘못 잰 값으로 자막이 흔들리지 않도록
+/// 두 번 연속 비슷한 값(0.5초 이내)이 나와야 적용한다.
+class LiveSyncTracker {
+  Duration? _previous;
+
+  void reset() => _previous = null;
+
+  /// 이번 측정값을 넣는다. 적용할 값이 정해지면 돌려준다.
+  Duration? add(Duration? offset) {
+    final previous = _previous;
+    if (offset != null &&
+        previous != null &&
+        (offset - previous).abs() <= const Duration(milliseconds: 500)) {
+      _previous = null;
+      return offset;
+    }
+    _previous = offset;
+    return null;
+  }
+}
+
+/// [from] 이후에 시작하는 자막만 [offset]만큼 옮긴다 (앞부분은 그대로, 시간순 유지)
+List<BilingualCue> shiftCuesFrom(
+  List<BilingualCue> cues,
+  Duration from,
+  Duration offset,
+) {
+  final out = [
+    for (final c in cues)
+      if (c.start >= from) shiftCues([c], offset).first else c,
+  ];
+  return out..sort((a, b) => a.start.compareTo(b.start));
 }
 
 /// 자막 길이가 영상과 맞는지 (다른 작품/편집본 자막 걸러내기).

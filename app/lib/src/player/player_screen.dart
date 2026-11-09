@@ -590,9 +590,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     ])
       SingleActivator(k): _player.playOrPause,
     const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
-        _seekBy(const Duration(seconds: -5)),
+        _seekSentence(-1, const Duration(seconds: -5)),
     const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
-        _seekBy(const Duration(seconds: 5)),
+        _seekSentence(1, const Duration(seconds: 5)),
     const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
         _player.setVolume((_player.state.volume + 5).clamp(0, 100)),
     const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
@@ -642,6 +642,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _toast('자막 ${s >= 0 ? '+' : ''}${s.toStringAsFixed(1)}초 ([ 빠르게 / ] 늦게)');
   }
 
+  Duration? _sentenceTarget;
+  DateTime _sentenceSeekAt = DateTime(0);
+
+  /// 문장 단위 이동. 갈 문장이 없으면(자막이 아직 없는 구간 등) [fallback]만큼 이동한다.
+  void _seekSentence(int direction, Duration fallback) {
+    // 연달아 누르면 재생 위치가 갱신되기 전이므로 직전 목표 위치를 기준으로 한다
+    final now = DateTime.now();
+    final recent = now.difference(_sentenceSeekAt).inMilliseconds < 500;
+    final from = recent
+        ? (_sentenceTarget ?? _player.state.position)
+        : _player.state.position;
+    final target = sentenceSeekTarget(_view.cues, from, direction);
+    if (target == null) {
+      _seekBy(fallback);
+      return;
+    }
+    _sentenceTarget = target;
+    _sentenceSeekAt = now;
+    _player.seek(target);
+  }
+
   void _seekBy(Duration d) {
     final p = _player.state.position + d;
     _player.seek(p < Duration.zero ? Duration.zero : p);
@@ -658,9 +679,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     topButtonBar: [Expanded(child: _topBar())],
     bottomButtonBar: [
       const MaterialDesktopSkipPreviousButton(),
-      _desktopSeekButton(Icons.replay_10, '10초 뒤로', -10),
+      _desktopSeekButton(Icons.fast_rewind, '이전 문장 (←)', -1),
       const MaterialDesktopPlayOrPauseButton(),
-      _desktopSeekButton(Icons.forward_10, '10초 앞으로', 10),
+      _desktopSeekButton(Icons.fast_forward, '다음 문장 (→)', 1),
       const MaterialDesktopSkipNextButton(),
       const MaterialDesktopVolumeButton(),
       const MaterialDesktopPositionIndicator(),
@@ -670,13 +691,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
   );
 
   // 버튼이 포커스를 가져가면 Space/Enter가 재생/일시정지 대신 버튼을 누르게 된다
-  Widget _desktopSeekButton(IconData icon, String tip, int seconds) =>
+  Widget _desktopSeekButton(IconData icon, String tip, int direction) =>
       ExcludeFocus(
         child: Tooltip(
           message: tip,
           child: MaterialDesktopCustomButton(
             icon: Icon(icon),
-            onPressed: () => _seekBy(Duration(seconds: seconds)),
+            onPressed: () =>
+                _seekSentence(direction, Duration(seconds: 10 * direction)),
           ),
         ),
       );
