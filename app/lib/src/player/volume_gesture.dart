@@ -3,6 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+/// 키 한 번에 바뀌는 음량 (0~100)
+const volumeKeyStep = 5.0;
+
+/// [current]에서 [delta]만큼 바꾼 음량. 0~100을 벗어나지 않는다.
+double steppedVolume(double current, double delta) =>
+    (current + delta).clamp(0.0, 100.0);
+
 /// 화면을 위로 밀면 소리 크게, 아래로 밀면 작게 (터치 기기).
 /// 기기 미디어 음량을 바꾼다 (볼륨 버튼과 같은 값). 탭·두 번 탭·가로 밀기는 아래 조작부로 그대로 간다.
 class VolumeDragLayer extends StatefulWidget {
@@ -69,15 +76,18 @@ class _VolumeDragLayerState extends State<VolumeDragLayer> {
         child: SizedBox.expand(
           child: _volume == null
               ? null
-              : Center(child: _VolumeIndicator(value: _volume!)),
+              : Center(child: VolumeIndicator(value: _volume!)),
         ),
       ),
     );
   }
 }
 
-class _VolumeIndicator extends StatelessWidget {
-  const _VolumeIndicator({required this.value});
+/// 음량을 바꿀 때 화면 가운데에 잠깐 보여 주는 표시
+class VolumeIndicator extends StatelessWidget {
+  const VolumeIndicator({super.key, required this.value});
+
+  /// 0.0~1.0
   final double value;
 
   @override
@@ -116,7 +126,11 @@ class _VolumeIndicator extends StatelessWidget {
               child: Text(
                 '${(value * 100).round()}',
                 textAlign: TextAlign.right,
-                style: const TextStyle(color: Colors.white, fontSize: 16),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  decoration: TextDecoration.none,
+                ),
               ),
             ),
           ],

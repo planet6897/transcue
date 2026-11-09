@@ -81,6 +81,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// 전체 화면에서 보여 줄 안내 (SnackBar는 전체 화면 뒤에 가려진다)
   final _flash = ValueNotifier<String?>(null);
+  final _centerHint = ValueNotifier<Widget?>(null); // 화살표 키 조작 표시
   Timer? _flashTimer;
 
   @override
@@ -179,6 +180,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _uiChanged.dispose();
     _flashTimer?.cancel();
     _flash.dispose();
+    _centerHintTimer?.cancel();
+    _centerHint.dispose();
     if (!_playerClosed) {
       _playerClosed = true;
       _player.dispose();
@@ -657,13 +660,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     ])
       SingleActivator(k): _player.playOrPause,
     const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
-        _seekSentence(-1, const Duration(seconds: -5)),
+        _seekByKey(-1, const Duration(seconds: -5)),
     const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
-        _seekSentence(1, const Duration(seconds: 5)),
+        _seekByKey(1, const Duration(seconds: 5)),
     const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
-        _player.setVolume((_player.state.volume + 5).clamp(0, 100)),
+        _changeVolume(volumeKeyStep),
     const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
-        _player.setVolume((_player.state.volume - 5).clamp(0, 100)),
+        _changeVolume(-volumeKeyStep),
     // 자막 싱크 수동 조정: [ 0.2초 빠르게, ] 0.2초 늦게
     const SingleActivator(LogicalKeyboardKey.bracketLeft): () =>
         _nudge(const Duration(milliseconds: -200)),
@@ -709,11 +712,41 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _toast('자막 ${s >= 0 ? '+' : ''}${s.toStringAsFixed(1)}초 ([ 빠르게 / ] 늦게)');
   }
 
+  double? _volumeTarget;
+  DateTime _volumeChangedAt = DateTime(0);
+  Timer? _centerHintTimer;
+
+  /// 화살표 키로 조작한 내용을 화면 가운데에 잠깐 보여 준다
+  void _showCenterHint(Widget hint) {
+    _centerHint.value = hint;
+    _centerHintTimer?.cancel();
+    _centerHintTimer = Timer(
+      const Duration(seconds: 1),
+      () => _centerHint.value = null,
+    );
+  }
+
+  /// 음량을 바꾸고 화면 가운데에 잠깐 보여 준다
+  void _changeVolume(double delta) {
+    // 키를 누르고 있으면 플레이어 값이 갱신되기 전에 다음 입력이 오므로 직전 목표값을 기준으로 한다
+    final now = DateTime.now();
+    final recent = now.difference(_volumeChangedAt).inMilliseconds < 500;
+    final from = recent
+        ? (_volumeTarget ?? _player.state.volume)
+        : _player.state.volume;
+    final target = steppedVolume(from, delta);
+    _volumeTarget = target;
+    _volumeChangedAt = now;
+    unawaited(_player.setVolume(target));
+    _showCenterHint(VolumeIndicator(value: target / 100));
+  }
+
   Duration? _sentenceTarget;
   DateTime _sentenceSeekAt = DateTime(0);
 
   /// 문장 단위 이동. 갈 문장이 없으면(자막이 아직 없는 구간 등) [fallback]만큼 이동한다.
-  void _seekSentence(int direction, Duration fallback) {
+  /// 문장 단위로 이동했으면 true, [fallback]만큼 이동했으면 false를 돌려준다.
+  bool _seekSentence(int direction, Duration fallback) {
     // 연달아 누르면 재생 위치가 갱신되기 전이므로 직전 목표 위치를 기준으로 한다
     final now = DateTime.now();
     final recent = now.difference(_sentenceSeekAt).inMilliseconds < 500;
@@ -723,11 +756,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final target = sentenceSeekTarget(_view.cues, from, direction);
     if (target == null) {
       _seekBy(fallback);
-      return;
+      return false;
     }
     _sentenceTarget = target;
     _sentenceSeekAt = now;
     _player.seek(target);
+    return true;
+  }
+
+  /// 좌우 화살표: 이동하고 어디로 갔는지 화면에 보여 준다
+  void _seekByKey(int direction, Duration fallback) {
+    final forward = direction > 0;
+    final bySentence = _seekSentence(direction, fallback);
+    _showCenterHint(
+      _SeekHint(
+        forward: forward,
+        label: bySentence
+            ? (forward ? '다음 문장' : '이전 문장')
+            : '${fallback.inSeconds.abs()}초 ${forward ? '앞으로' : '뒤로'}',
+      ),
+    );
   }
 
   DateTime _lastVideoClick = DateTime(0);
@@ -1109,6 +1157,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             view: _view,
                             onTapCue: _copyCue,
                           ),
+                          Positioned.fill(
+                            child: Center(
+                              child: ValueListenableBuilder(
+                                valueListenable: _centerHint,
+                                builder: (context, hint, _) =>
+                                    hint ?? const SizedBox.shrink(),
+                              ),
+                            ),
+                          ),
                           // 전체 화면 안내는 상단 줄과 겹치지 않게 그 아래에 둔다
                           Positioned(
                             top: 56,
@@ -1136,6 +1193,47 @@ class _PlayerScreenState extends State<PlayerScreen> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 좌우 화살표로 이동할 때 화면 가운데에 잠깐 보여 주는 표시
+class _SeekHint extends StatelessWidget {
+  const _SeekHint({required this.forward, required this.label});
+
+  final bool forward;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final children = [
+      Icon(
+        forward ? Icons.fast_forward : Icons.fast_rewind,
+        color: Colors.white,
+        size: 28,
+      ),
+      const SizedBox(width: 10),
+      Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 16,
+          decoration: TextDecoration.none,
+        ),
+      ),
+    ];
+    return IgnorePointer(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.7),
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: forward ? children.reversed.toList() : children,
         ),
       ),
     );
