@@ -52,9 +52,9 @@ enum WhisperModel {
   String get url =>
       'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$file';
 
-  /// 기기별 기본값. 태블릿 실측(갤럭시 탭 S9): turbo는 49초 소리에 34~98초 → 재생을 겨우 따라감
-  static WhisperModel get platformDefault =>
-      Platform.isAndroid || Platform.isIOS ? small : turbo;
+  /// 기본값은 재생을 앞서갈 수 있는 small.
+  /// 실측: i7-1255U에서 small은 재생 속도의 3배, turbo는 0.8배로 재생을 따라가지 못한다.
+  static const defaultModel = small;
 }
 
 /// 앱 설정. 앱 지원 폴더의 settings.json에 저장한다.
@@ -73,7 +73,7 @@ class AppSettings {
     this.vocabLevel = VocabLevel.intermediate,
     this.autoPlayNext = true,
     this.repeatVideo = false,
-  }) : whisperModel = whisperModel ?? WhisperModel.platformDefault;
+  }) : whisperModel = whisperModel ?? WhisperModel.defaultModel;
 
   /// 반복 재생: 영상이 끝나면 처음부터 다시 (연속 재생보다 우선)
   bool repeatVideo;
@@ -120,7 +120,7 @@ class AppSettings {
         ),
         whisperModel: WhisperModel.values.firstWhere(
           (m) => m.name == j['whisperModel'],
-          orElse: () => WhisperModel.platformDefault,
+          orElse: () => WhisperModel.defaultModel,
         ),
         osApiKey: j['osApiKey'] as String? ?? '',
         osUsername: j['osUsername'] as String? ?? '',
