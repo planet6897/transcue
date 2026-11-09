@@ -31,6 +31,34 @@ void main() {
     expect(DualSubtitleState().copyText(noKo), 'Who?');
   });
 
+  testWidgets('복사 표시는 잠깐 켜졌다가 저절로 꺼진다', (t) async {
+    final view = DualSubtitleState();
+    view.flashCopied();
+    expect(view.copied, isTrue);
+    await t.pump(const Duration(milliseconds: 1000));
+    expect(view.copied, isTrue);
+    await t.pump(const Duration(milliseconds: 300));
+    expect(view.copied, isFalse);
+  });
+
+  testWidgets('복사 표시가 켜지면 보이고 꺼지면 투명해진다', (t) async {
+    double opacity() => t
+        .widget<AnimatedOpacity>(
+          find.ancestor(
+            of: find.text('✓ 복사됨'),
+            matching: find.byType(AnimatedOpacity),
+          ),
+        )
+        .opacity;
+    Widget build(bool on) => MaterialApp(
+      home: DualSubtitleOverlay(cue: cue, copied: on),
+    );
+    await t.pumpWidget(build(false));
+    expect(opacity(), 0);
+    await t.pumpWidget(build(true));
+    expect(opacity(), 1);
+  });
+
   Widget host(Widget overlay, VoidCallback behind) => MaterialApp(
     home: Stack(
       children: [

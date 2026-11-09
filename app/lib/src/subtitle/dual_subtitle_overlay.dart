@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'bilingual_cue.dart';
@@ -35,6 +37,28 @@ class DualSubtitleState extends ChangeNotifier {
   set showTranslation(bool v) {
     _showTranslation = v;
     notifyListeners();
+  }
+
+  bool _copied = false;
+  Timer? _copiedTimer;
+
+  /// 방금 자막을 복사했는지 (자막 위에 잠깐 표시)
+  bool get copied => _copied;
+
+  void flashCopied() {
+    _copied = true;
+    notifyListeners();
+    _copiedTimer?.cancel();
+    _copiedTimer = Timer(const Duration(milliseconds: 1200), () {
+      _copied = false;
+      notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    _copiedTimer?.cancel();
+    super.dispose();
   }
 
   /// [cue]에서 지금 화면에 보이는 줄만 복사용 글로 만든다.
@@ -84,6 +108,7 @@ class LiveDualSubtitle extends StatelessWidget {
           showTranslation: view.showTranslation,
           showVocab: view.showVocab,
           onTapCue: onTapCue,
+          copied: view.copied,
         ),
       ),
     );
@@ -100,9 +125,11 @@ class DualSubtitleOverlay extends StatelessWidget {
     this.showTranslation = true,
     this.showVocab = false,
     this.onTapCue,
+    this.copied = false,
   });
 
   final ValueChanged<BilingualCue>? onTapCue;
+  final bool copied;
   final BilingualCue? cue;
   final bool showOriginal;
   final bool showTranslation;
@@ -257,10 +284,40 @@ class DualSubtitleOverlay extends StatelessWidget {
   /// 자막 상자만 클릭을 받는다. [onTapCue]가 없으면 클릭을 통과시킨다.
   Widget _tappable(BilingualCue c, Widget box) {
     final onTap = onTapCue;
-    if (onTap == null) return IgnorePointer(child: box);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(onTap: () => onTap(c), child: box),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 항상 자리를 차지해 표시될 때 자막이 움직이지 않는다
+        IgnorePointer(
+          child: AnimatedOpacity(
+            opacity: copied ? 1 : 0,
+            duration: const Duration(milliseconds: 150),
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.45),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Text(
+                '✓ 복사됨',
+                style: TextStyle(
+                  color: _vocabColor,
+                  fontSize: 13,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (onTap == null)
+          IgnorePointer(child: box)
+        else
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(onTap: () => onTap(c), child: box),
+          ),
+      ],
     );
   }
 }

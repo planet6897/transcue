@@ -475,7 +475,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final text = _view.copyText(cue);
     if (text.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: text));
-    _toast('자막을 복사했습니다');
+    _view.flashCopied();
   }
 
   /// 자막 다시 만들기: 비용이 드는 작업이라 먼저 확인한다
@@ -703,21 +703,21 @@ class _PlayerScreenState extends State<PlayerScreen> {
             : const Duration(seconds: 4),
         topButtonBar: [Expanded(child: _topBar())],
         primaryButtonBar: [
-          const Spacer(flex: 2),
+          _touchPlayArea(flex: 2, doubleTapSeconds: -10),
           MaterialCustomButton(
             icon: const Icon(Icons.replay_10),
             iconSize: 44,
             onPressed: () => _seekBy(const Duration(seconds: -10)),
           ),
-          const Spacer(),
+          _touchPlayArea(flex: 1, doubleTapSeconds: -10),
           const MaterialPlayOrPauseButton(iconSize: 72),
-          const Spacer(),
+          _touchPlayArea(flex: 1, doubleTapSeconds: 10),
           MaterialCustomButton(
             icon: const Icon(Icons.forward_10),
             iconSize: 44,
             onPressed: () => _seekBy(const Duration(seconds: 10)),
           ),
-          const Spacer(flex: 2),
+          _touchPlayArea(flex: 2, doubleTapSeconds: 10),
         ],
         bottomButtonBar: const [
           MaterialPositionIndicator(),
@@ -731,6 +731,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
         seekBarThumbSize: 16,
         seekBarPositionColor: const Color(0xFF80DEEA),
         seekBarThumbColor: const Color(0xFF80DEEA),
+      );
+
+  /// 터치 조작부가 보일 때 버튼 사이 빈 곳: 탭하면 재생/일시정지, 두 번 탭하면 이동.
+  /// 조작부가 숨겨져 있으면 이 영역이 없어 탭이 조작부를 띄운다.
+  Widget _touchPlayArea({required int flex, required int doubleTapSeconds}) =>
+      Expanded(
+        flex: flex,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _player.playOrPause,
+          onDoubleTap: () => _seekBy(Duration(seconds: doubleTapSeconds)),
+          child: const SizedBox.expand(),
+        ),
       );
 
   /// 개발용: DUALCUE_PIN_CONTROLS=1 이면 조작부를 계속 띄운다 (화면 검증용)
