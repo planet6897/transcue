@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import '../pipeline/stt_engine.dart' show canTranscribe;
 import '../pipeline/subtitle_job.dart';
 import '../settings/app_settings.dart';
 import '../settings/settings_dialog.dart';
@@ -17,9 +18,32 @@ import '../source/yt_dlp.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
 import '../pipeline/tools.dart';
 import 'file_browser.dart';
+import 'play_counts.dart';
 import 'playlist.dart';
 import 'resume.dart';
 import 'volume_gesture.dart';
+
+/// 자막 다시 만들기 메뉴
+enum _Regen {
+  translation(
+    '번역 다시 하기',
+    '지금 번역을 지우고 Claude로 다시 번역합니다. 원문 자막은 그대로 둡니다. API 비용이 다시 발생합니다.',
+  ),
+  fetch(
+    '자막 다시 가져오기',
+    '저장된 자막과 번역을 무시하고 내장·인터넷·YouTube 자막을 다시 찾습니다. '
+        '없으면 음성 인식으로 만들고, 번역도 새로 합니다. API 비용이 다시 발생합니다.',
+  ),
+  speech(
+    '음성 인식으로 새로 만들기',
+    '저장된 자막과 번역을 무시하고 음성 인식으로 자막을 새로 만든 뒤 번역합니다. '
+        '시간이 걸리고 API 비용이 다시 발생합니다.',
+  );
+
+  const _Regen(this.label, this.detail);
+  final String label;
+  final String detail;
+}
 
 /// 플레이어 화면: 로컬 파일 / YouTube 재생 + 이중 자막 오버레이.
 /// 영상을 열면 [SubtitleJob]이 자막 확보(캐시·내장·YouTube·STT)와 번역을 진행한다.
@@ -57,6 +81,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
   String? _resumeKey;
   Timer? _positionTimer;
   StreamSubscription<bool>? _playingSub;
+
+  /// 지금 영상의 반복 재생 상태와 재생 횟수 (화면 표시용)
+  final _playInfo = ValueNotifier<({bool repeat, int count})>((
+    repeat: false,
+    count: 0,
+  ));
+  PlayCounts? _counts;
+  String? _countKey;
 
   /// 앱 종료 전에 플레이어를 먼저 닫는다.
   /// 안 닫으면 Dart가 내려간 뒤 mpv가 이벤트를 보내 종료 시 비정상 종료(SIGABRT)된다
@@ -99,6 +131,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     AppSettings.load().then((s) {
       setState(() => _settings = s);
       _view.showVocab = s.showVocab;
+      _publishPlayInfo();
       // 개발용: DUALCUE_OPEN=<파일 경로> 로 실행하면 바로 연다 (실기기 자동 검증용)
       final auto = kDebugMode ? Platform.environment['DUALCUE_OPEN'] : null;
       if (auto != null && auto.isNotEmpty) {
@@ -120,6 +153,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _lifecycle.dispose();
     _job?.dispose();
     _view.dispose();
+    _playInfo.dispose();
     if (!_playerClosed) {
       _playerClosed = true;
       _player.dispose();
@@ -134,13 +168,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
       ..showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  void _startJob(JobSource source) {
+  void _startJob(JobSource source, {JobRefresh refresh = JobRefresh.none}) {
     // 개발용: DUALCUE_NO_JOB=1 이면 자막 작업(인식/번역 비용)을 건너뛴다
     if (kDebugMode && Platform.environment['DUALCUE_NO_JOB'] == '1') return;
     _job?.dispose();
     final job = SubtitleJob(
       source: source,
       settings: _settings,
+      refresh: refresh,
       playhead: () => _player.state.position,
       mediaDuration: () => _player.state.duration,
     );
@@ -196,6 +231,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
     if (kDebugMode) debugPrint('[open] $path');
     _resumeKey = null;
+    await _beginCount(PlaybackPositions.keyForPath(path));
     final loaded = _durationLoaded();
     await _player.open(Media(path));
     // 자막 작업은 재생 위치부터 시작하므로 이어 보기 위치로 먼저 옮긴다
@@ -227,6 +263,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 개발용: DUALCUE_SEEK=<초>, DUALCUE_FULLSCREEN=1 (실기기 화면 검증용)
   Future<void> _debugAutoplay() async {
     final env = Platform.environment;
+    if (env['DUALCUE_REPEAT'] == '1') {
+      _settings.repeatVideo = true;
+      _publishPlayInfo();
+    }
+    final regen = _Regen.values.asNameMap()[env['DUALCUE_REGEN']];
+    final job = _job;
+    if (regen != null && job != null) {
+      while (job.stage != JobStage.done && job.stage != JobStage.failed) {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }
+      debugPrint('[regen] ${regen.name}');
+      _applyRegen(regen);
+    }
     final seek = int.tryParse(env['DUALCUE_SEEK'] ?? '');
     if (seek != null) {
       await _player.stream.duration.firstWhere((d) => d > Duration.zero);
@@ -265,6 +314,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       // (open()은 로드 완료 전에 반환되고, 그 사이 mpv audio-add는 조용히 실패함)
       await _rememberPosition();
       _resumeKey = null;
+      await _beginCount(PlaybackPositions.keyForYoutube(id));
       final loaded = _player.stream.duration
           .firstWhere((d) => d > Duration.zero)
           .timeout(const Duration(seconds: 30));
@@ -333,9 +383,91 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _resumeKey = key; // 옮긴 뒤부터 기록 (옮기기 전 0초가 기록되지 않게)
   }
 
-  /// 영상이 끝났을 때: 연속 재생이 켜져 있으면 다음 영상
+  Future<PlayCounts> _countStore() async => _counts ??= PlayCounts(
+    File('${(await AppSettings.supportDir()).path}/play_counts.json'),
+  );
+
+  void _publishPlayInfo([int? count]) {
+    _playInfo.value = (
+      repeat: _settings.repeatVideo,
+      count: count ?? _playInfo.value.count,
+    );
+  }
+
+  /// 새 영상을 열 때 그 영상의 재생 횟수를 불러온다
+  Future<void> _beginCount(String key) async {
+    _countKey = key;
+    final n = await (await _countStore()).get(key);
+    if (_countKey == key) _publishPlayInfo(n);
+  }
+
+  Future<void> _countPlay() async {
+    final key = _countKey;
+    if (key == null) return;
+    final n = await (await _countStore()).increment(key);
+    if (kDebugMode) debugPrint('[repeat] count=$n');
+    if (_countKey == key) _publishPlayInfo(n);
+  }
+
+  Future<void> _resetCount() async {
+    final key = _countKey;
+    if (key == null) return;
+    await (await _countStore()).reset(key);
+    if (_countKey == key) _publishPlayInfo(0);
+    _toast('재생 횟수를 초기화했습니다');
+  }
+
+  Future<void> _toggleRepeat() async {
+    setState(() => _settings.repeatVideo = !_settings.repeatVideo);
+    _publishPlayInfo();
+    await _settings.save();
+    _toast(_settings.repeatVideo ? '반복 재생 켜짐 (R)' : '반복 재생 꺼짐 (R)');
+  }
+
+  /// 자막 다시 만들기: 비용이 드는 작업이라 먼저 확인한다
+  Future<void> _confirmRegen(_Regen regen) async {
+    final job = _job;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(regen.label),
+        content: Text(regen.detail),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('다시 만들기'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && job != null && identical(job, _job)) _applyRegen(regen);
+  }
+
+  void _applyRegen(_Regen regen) {
+    final job = _job;
+    if (job == null) return;
+    switch (regen) {
+      case _Regen.translation:
+        unawaited(job.retranslate());
+      case _Regen.fetch:
+        _startJob(job.source, refresh: JobRefresh.fetch);
+      case _Regen.speech:
+        _startJob(job.source, refresh: JobRefresh.speech);
+    }
+  }
+
+  /// 영상이 끝났을 때: 반복 재생이면 처음부터, 연속 재생이 켜져 있으면 다음 영상
   void _onCompleted() {
     unawaited(_rememberPosition()); // 끝까지 봤으면 기록 지움
+    unawaited(_countPlay());
+    if (_settings.repeatVideo) {
+      unawaited(_player.seek(Duration.zero).then((_) => _player.play()));
+      return;
+    }
     final path = _currentPath;
     if (!_settings.autoPlayNext || path == null) return;
     final next = neighborVideo(path);
@@ -417,6 +549,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     const SingleActivator(LogicalKeyboardKey.bracketRight): () =>
         _nudge(const Duration(milliseconds: 200)),
     const SingleActivator(LogicalKeyboardKey.keyV): _toggleVocab,
+    const SingleActivator(LogicalKeyboardKey.keyR): _toggleRepeat,
+    const SingleActivator(LogicalKeyboardKey.keyR, shift: true): _resetCount,
     // 처음부터
     const SingleActivator(LogicalKeyboardKey.home): () =>
         _player.seek(Duration.zero),
@@ -463,7 +597,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late final _controlsTheme = MaterialDesktopVideoControlsThemeData(
     playAndPauseOnTap: true,
     keyboardShortcuts: _shortcuts,
+    bottomButtonBar: [
+      const MaterialDesktopSkipPreviousButton(),
+      _desktopSeekButton(Icons.replay_10, '10초 뒤로', -10),
+      const MaterialDesktopPlayOrPauseButton(),
+      _desktopSeekButton(Icons.forward_10, '10초 앞으로', 10),
+      const MaterialDesktopSkipNextButton(),
+      const MaterialDesktopVolumeButton(),
+      const MaterialDesktopPositionIndicator(),
+      const Spacer(),
+      const MaterialDesktopFullscreenButton(),
+    ],
   );
+
+  // 버튼이 포커스를 가져가면 Space/Enter가 재생/일시정지 대신 버튼을 누르게 된다
+  Widget _desktopSeekButton(IconData icon, String tip, int seconds) =>
+      ExcludeFocus(
+        child: Tooltip(
+          message: tip,
+          child: MaterialDesktopCustomButton(
+            icon: Icon(icon),
+            onPressed: () => _seekBy(Duration(seconds: seconds)),
+          ),
+        ),
+      );
 
   /// 터치 기기(태블릿·휴대폰): YouTube처럼
   /// - 화면을 한 번 탭 → 화면이 어두워지며 조작 버튼 표시 (4초 뒤 숨김)
@@ -566,6 +723,40 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       ),
                       onPressed: _toggleVocab,
                     ),
+                    PopupMenuButton<_Regen>(
+                      tooltip: '자막·번역 다시 만들기',
+                      icon: const Icon(Icons.restart_alt),
+                      enabled: job != null,
+                      onSelected: _confirmRegen,
+                      itemBuilder: (_) => [
+                        PopupMenuItem(
+                          value: _Regen.translation,
+                          enabled: job?.canRetranslate ?? false,
+                          child: Text(_Regen.translation.label),
+                        ),
+                        PopupMenuItem(
+                          value: _Regen.fetch,
+                          child: Text(_Regen.fetch.label),
+                        ),
+                        if (canTranscribe)
+                          PopupMenuItem(
+                            value: _Regen.speech,
+                            child: Text(_Regen.speech.label),
+                          ),
+                      ],
+                    ),
+                    IconButton(
+                      tooltip: _settings.repeatVideo
+                          ? '반복 재생 켜짐 (R)'
+                          : '반복 재생 꺼짐 (R)',
+                      icon: Icon(
+                        Icons.repeat_one,
+                        color: _settings.repeatVideo
+                            ? const Color(0xFF80DEEA)
+                            : null,
+                      ),
+                      onPressed: _toggleRepeat,
+                    ),
                     IconButton(
                       tooltip: '이전 영상 (P)',
                       icon: const Icon(Icons.skip_previous),
@@ -646,6 +837,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             MaterialDesktopVideoControls(state),
                           // 위로 밀면 소리 크게, 아래로 밀면 작게 (조작부 위에 겹침)
                           if (Platform.isAndroid) const VolumeDragLayer(),
+                          PlayCountBadge(info: _playInfo, onReset: _resetCount),
                         ],
                       ),
                     ),
