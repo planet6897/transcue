@@ -24,6 +24,7 @@ Stream<SttEvent> transcribeRange({
   required File model,
   File? vadModel,
   String language = 'auto',
+  String? fallbackLanguage,
   required Directory tmp,
 }) async* {
   if (Platform.isAndroid) {
@@ -47,6 +48,7 @@ Stream<SttEvent> transcribeRange({
     model: model,
     vadModel: vadModel,
     language: language,
+    fallbackLanguage: fallbackLanguage,
   );
 }
 
