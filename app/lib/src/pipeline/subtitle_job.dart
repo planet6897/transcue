@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import '../online/opensubtitles.dart';
+import '../player/resume.dart' show formatPosition;
 import '../settings/app_settings.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
@@ -130,8 +131,8 @@ class SubtitleJob extends ChangeNotifier {
   static const _contextSize = 5;
 
   /// 음성 인식 조각 길이: 처음(또는 이동 직후)은 짧게 해서 자막이 빨리 나오게
-  static const _firstChunkMs = 45000;
-  static const _chunkMs = 180000;
+  static const _firstChunkMs = 20000;
+  static const _chunkMs = 30000;
 
   /// 조각 끝에서 문장이 잘리지 않도록 더 읽는 시간
   static const _tailMs = 4000;
@@ -772,12 +773,20 @@ class SubtitleJob extends ChangeNotifier {
     _setCues([...cues.take(lo), c, ...cues.skip(lo)]);
   }
 
+  /// 지금 인식 중인 구간과 경과 시간 (whisper는 진행률을 드물게만 알려 준다)
+  String? _activeChunk;
+  final _chunkWatch = Stopwatch();
+
   String _sttStatus(double fraction) {
     final t = cues.where((c) => c.translation != null).length;
+    final active = _activeChunk;
+    final chunk = active == null
+        ? ''
+        : ' · $active 인식 중 ${_chunkWatch.elapsed.inSeconds}초';
     final trans = settings.hasClaudeKey && sourceLang != 'ko'
         ? ' · 번역 $t줄'
         : '';
-    return '음성 인식 ${(fraction * 100).toStringAsFixed(0)}% · ${cues.length}줄$trans';
+    return '음성 인식 ${(fraction * 100).toStringAsFixed(0)}% · ${cues.length}줄$trans$chunk';
   }
 
   Future<void> _speechToText() async {
@@ -844,33 +853,52 @@ class SubtitleJob extends ChangeNotifier {
         );
         var lastCueEnd = hardEnd;
         var ended = false;
-        await for (final ev in transcribeRange(
-          input: input,
-          httpHeaders: headers,
-          start: Duration(milliseconds: start),
-          length: Duration(milliseconds: readEnd - start),
-          model: model,
-          vadModel: vad,
-          language: sourceLang ?? 'auto',
-          tmp: tmp,
-        )) {
-          switch (ev) {
-            case SttEnd():
-              ended = true;
-            case SttCue(:final cue):
-              final c = shiftCues([cue], Duration(milliseconds: start)).first;
-              final s = c.start.inMilliseconds;
-              // 다음 조각에 속하는 줄, 이미 인식한 구간의 줄은 버린다
-              if (s >= hardEnd || _inCovered(s)) continue;
-              final e = c.end.inMilliseconds;
-              if (e > lastCueEnd) lastCueEnd = e > readEnd ? readEnd : e;
-              _insertCue(c);
-            case SttProgress(:final fraction):
-              final p = (_coveredMs + fraction * (hardEnd - start)) / total;
-              _set(JobStage.transcribing, _sttStatus(p), p);
-            case SttLanguage(:final code):
-              sourceLang ??= code;
+        _activeChunk =
+            '${formatPosition(Duration(milliseconds: start))}'
+            '~${formatPosition(Duration(milliseconds: hardEnd))}';
+        _chunkWatch
+          ..reset()
+          ..start();
+        final ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+          _set(
+            JobStage.transcribing,
+            _sttStatus(progress ?? _coveredMs / total),
+            progress,
+          );
+        });
+        try {
+          await for (final ev in transcribeRange(
+            input: input,
+            httpHeaders: headers,
+            start: Duration(milliseconds: start),
+            length: Duration(milliseconds: readEnd - start),
+            model: model,
+            vadModel: vad,
+            language: sourceLang ?? 'auto',
+            tmp: tmp,
+          )) {
+            switch (ev) {
+              case SttEnd():
+                ended = true;
+              case SttCue(:final cue):
+                final c = shiftCues([cue], Duration(milliseconds: start)).first;
+                final s = c.start.inMilliseconds;
+                // 다음 조각에 속하는 줄, 이미 인식한 구간의 줄은 버린다
+                if (s >= hardEnd || _inCovered(s)) continue;
+                final e = c.end.inMilliseconds;
+                if (e > lastCueEnd) lastCueEnd = e > readEnd ? readEnd : e;
+                _insertCue(c);
+                _kickTranslation(); // 구간이 끝나길 기다리지 않고 바로 번역
+              case SttProgress(:final fraction):
+                final p = (_coveredMs + fraction * (hardEnd - start)) / total;
+                _set(JobStage.transcribing, _sttStatus(p), p);
+              case SttLanguage(:final code):
+                sourceLang ??= code;
+            }
           }
+        } finally {
+          ticker.cancel();
+          _activeChunk = null;
         }
         if (ended) {
           // 소리가 끝남. 재생 위치부터 시작했다면 앞부분이 남아 있으므로 계속한다
@@ -899,18 +927,11 @@ class SubtitleJob extends ChangeNotifier {
 
   String _key(BilingualCue c) => '${c.start.inMilliseconds}|${c.original}';
 
-  /// 번역해도 되는 줄: 음성 인식이 끝난 구간의 줄 (조각 중간 줄은 아직 바뀔 수 있음)
-  bool _isFinal(BilingualCue c) =>
-      _sttDone || originalFrom != fromStt || _inCovered(c.start.inMilliseconds);
-
   List<BilingualCue> _pendingByPriority() {
     final ph = playhead().inMilliseconds - 5000;
     final p = [
       for (final c in cues)
-        if (c.translation == null &&
-            !_attempted.contains(_key(c)) &&
-            _isFinal(c))
-          c,
+        if (c.translation == null && !_attempted.contains(_key(c))) c,
     ];
     return [
       ...p.where((c) => c.end.inMilliseconds >= ph),
@@ -1034,10 +1055,7 @@ class SubtitleJob extends ChangeNotifier {
     final ph = playhead().inMilliseconds - 5000;
     final p = [
       for (final c in cues)
-        if (c.words == null &&
-            !_vocabAttempted.contains(_key(c)) &&
-            _isFinal(c))
-          c,
+        if (c.words == null && !_vocabAttempted.contains(_key(c))) c,
     ];
     return [
       ...p.where((c) => c.end.inMilliseconds >= ph),
