@@ -45,6 +45,18 @@ enum JobStage {
   failed,
 }
 
+/// 저장된 결과를 어떻게 다시 만들지
+enum JobRefresh {
+  /// 저장된 결과를 그대로 사용
+  none,
+
+  /// 저장된 결과를 무시하고 내장·인터넷·YouTube 자막부터 다시 찾는다
+  fetch,
+
+  /// 저장된 결과와 기존 자막을 무시하고 음성 인식으로 만든다
+  speech,
+}
+
 /// 영상 하나의 이중 자막을 만드는 작업.
 ///
 /// 순서: 캐시 → (내장 자막 | YouTube 자막) → 없으면 음성 추출 + whisper STT
@@ -53,10 +65,14 @@ class SubtitleJob extends ChangeNotifier {
   SubtitleJob({
     required this.source,
     required this.settings,
+    this.refresh = JobRefresh.none,
     Duration Function()? playhead,
     Duration Function()? mediaDuration,
   }) : playhead = playhead ?? (() => Duration.zero),
        mediaDuration = mediaDuration ?? (() => Duration.zero);
+
+  /// 저장된 결과는 새 결과가 저장될 때 덮어쓰므로, 다시 만들다 실패해도 남는다.
+  final JobRefresh refresh;
 
   /// 플레이어가 알려 준 영상 길이 (ffprobe가 없는 모바일용)
   final Duration Function() mediaDuration;
@@ -162,6 +178,9 @@ class SubtitleJob extends ChangeNotifier {
 
   Future<void> _saveCache() async {
     if (_dbg('DUALCUE_NO_CACHE')) return;
+    // 중단된 작업은 저장하지 않는다. 일부만 인식한 결과가 완료로 기록되거나,
+    // 다시 만들기를 시작한 새 작업의 결과를 덮어쓰게 된다.
+    if (_disposed) return;
     if (cues.isEmpty && _covered.isEmpty) return;
     final f = await _cacheFile();
     await f.writeAsString(
@@ -248,13 +267,19 @@ class SubtitleJob extends ChangeNotifier {
   Future<void> run() async {
     try {
       _set(JobStage.preparing, '자막 준비 중…');
-      final cached = await _loadCache();
+      final cached = refresh == JobRefresh.none && await _loadCache();
+      // 직접 음성 인식을 고른 결과가 다음에 열 때 인터넷 자막으로 바뀌지 않게 한다
+      if (refresh == JobRefresh.speech) _osTried = true;
       var have = cached && _complete;
       // 저장된 결과가 음성 인식이면 인터넷 자막을 먼저 찾아본다 (있으면 우선 사용)
       if (cached && _shouldTryOnlineOverCache && await _tryOnlineOverCache()) {
         have = true;
       }
-      if (!cached && await _loadExistingSubtitles()) have = true;
+      if (!cached &&
+          refresh != JobRefresh.speech &&
+          await _loadExistingSubtitles()) {
+        have = true;
+      }
       // 받아 온 자막이 실제 음성과 같은 내용인지 확인 (번역 비용을 쓰기 전에)
       if (have && _needsSpeechCheck && !await _checkSpeech()) have = false;
       if (!have) {
@@ -783,8 +808,9 @@ class SubtitleJob extends ChangeNotifier {
           }
         }
         if (ended) {
-          _addCovered(start, total); // 소리가 끝남 (길이를 모를 때)
-          break;
+          // 소리가 끝남. 재생 위치부터 시작했다면 앞부분이 남아 있으므로 계속한다
+          _addCovered(start, total);
+          continue;
         }
         // 마지막 문장이 조각 끝을 넘었으면 그 문장 끝까지를 인식된 구간으로
         _addCovered(start, lastCueEnd);
@@ -859,6 +885,21 @@ class SubtitleJob extends ChangeNotifier {
     if (!_disposed && stage != JobStage.failed && _sttDone) {
       _set(JobStage.done, _summary());
     }
+  }
+
+  /// 번역만 다시 할 수 있는 상태인지. 작업 중에는 자막이 계속 바뀌므로 끝난 뒤에만.
+  bool get canRetranslate =>
+      stage == JobStage.done &&
+      sourceLang != 'ko' &&
+      cues.isNotEmpty &&
+      settings.hasClaudeKey;
+
+  /// 원문은 그대로 두고 번역을 지운 뒤 다시 번역한다.
+  Future<void> retranslate() async {
+    if (!canRetranslate) return;
+    _fromCache = false;
+    _setCues([for (final c in cues) c.withTranslation(null)]);
+    await translateRemaining();
   }
 
   Future<void> _translateLoop() async {
