@@ -15,7 +15,7 @@ class TranscueApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Transcue',
+      title: 'Transcue · AI 동영상 플레이어',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(

@@ -70,7 +70,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   AppSettings _settings = AppSettings();
   SubtitleJob? _job;
-  String _title = 'Transcue';
+  String _title = 'Transcue · AI 동영상 플레이어';
   bool _loading = false;
 
   /// 영상을 연 적이 있는지 (열기 전에는 메뉴를 항상 보여 준다)

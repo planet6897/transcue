@@ -297,14 +297,14 @@ class SubtitleJob extends ChangeNotifier {
           await _autoSync();
           _checkKoreanTiming();
         } else {
-          unawaited(_autoSync());
+          unawaited(_wholeFileSync = _autoSync());
         }
       }
+      unawaited(_liveSyncLoop());
       await translateRemaining();
       if (stage != JobStage.failed) {
         _set(JobStage.done, _summary());
       }
-      unawaited(_liveSyncLoop());
     } catch (e, st) {
       debugPrint('SubtitleJob failed: $e\n$st');
       _set(JobStage.failed, '자막 생성 실패: $e');
@@ -574,30 +574,30 @@ class SubtitleJob extends ChangeNotifier {
 
   // ---- 실시간 싱크 ----
 
-  static const _liveInterval = Duration(seconds: 15);
-  static const _liveWindow = Duration(seconds: 45);
+  static const _liveInterval = Duration(seconds: 10);
+  static const _liveWindow = Duration(seconds: 40);
 
-  /// 받아 온 자막만 대상이다 (음성 인식 자막은 같은 음성에서 만들어 이미 맞다).
+  /// 영상 전체 싱크 작업. 끝나기 전에 옮기면 두 보정이 겹친다.
+  Future<void>? _wholeFileSync;
+
   /// 판본이 다른 자막은 광고 구간 등에서 어긋나는 양이 구간마다 달라
   /// 영상 전체에 한 번 적용하는 [_autoSync]만으로는 맞출 수 없다.
   bool get _canLiveSync =>
-      hasDesktopTools &&
-      source is LocalFileSource &&
-      originalFrom != fromStt &&
-      cues.isNotEmpty;
+      hasDesktopTools && source is LocalFileSource && cues.isNotEmpty;
 
   /// 재생 중 앞으로 나올 구간의 음성과 자막을 계속 비교해 어긋나면 그 지점부터 옮긴다.
   Future<void> _liveSyncLoop() async {
-    if (!_canLiveSync) return;
+    await _wholeFileSync;
+    if (_disposed || !_canLiveSync) return;
     final path = (source as LocalFileSource).path;
     final tmp = await Directory.systemTemp.createTemp('transcue_live_');
     try {
       final vad = await ensureVadModel();
       final wav = '${tmp.path}/live.wav';
       final tracker = LiveSyncTracker();
-      var last = playhead();
-      while (!_disposed) {
-        await Future<void>.delayed(_liveInterval);
+      var last = playhead() - _liveInterval; // 첫 측정은 기다리지 않는다
+      for (var first = true; !_disposed; first = false) {
+        if (!first) await Future<void>.delayed(_liveInterval);
         if (_disposed) break;
         final now = playhead();
         final moved = now - last;
@@ -605,13 +605,8 @@ class SubtitleJob extends ChangeNotifier {
         // 앞뒤로 건너뛰었으면 다른 구간이므로 이전 측정값을 버린다
         if (moved.isNegative || moved > _liveInterval * 2) tracker.reset();
         if (moved < const Duration(seconds: 5)) continue; // 일시정지
-        // 사용자가 직접 맞춘 뒤에는 건드리지 않는다.
-        // 번역 중에 옮기면 진행 중인 줄의 결과를 찾지 못한다
-        if (manualOffset != Duration.zero ||
-            _loop != null ||
-            _vocabLoop != null) {
-          continue;
-        }
+        // 사용자가 직접 맞춘 뒤에는 건드리지 않는다
+        if (manualOffset != Duration.zero) continue;
         final end = now + _liveWindow;
         final near = [
           for (final c in cues)
