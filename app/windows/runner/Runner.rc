@@ -90,7 +90,7 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "Transcue" "\0"
-            VALUE "FileDescription", "Transcue" "\0"
+            VALUE "FileDescription", "Transcue AI Video Player" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "transcue" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 Transcue. All rights reserved." "\0"

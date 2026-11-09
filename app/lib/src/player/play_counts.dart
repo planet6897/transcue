@@ -66,7 +66,7 @@ class PlayCountBadge extends StatelessWidget {
       builder: (context, v, _) {
         if (!v.repeat && v.count == 0) return const SizedBox.shrink();
         return Align(
-          alignment: Alignment.topLeft,
+          alignment: Alignment.center,
           child: Container(
             margin: const EdgeInsets.all(8),
             padding: const EdgeInsets.only(left: 10),

@@ -1,6 +1,6 @@
 # Transcue (Flutter 앱)
 
-A new Flutter project.
+AI 동영상 플레이어 Transcue의 Flutter 앱입니다.
 
 ## Getting Started
 

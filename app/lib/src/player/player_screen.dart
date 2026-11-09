@@ -15,6 +15,7 @@ import '../settings/app_settings.dart';
 import '../settings/settings_dialog.dart';
 import '../source/youtube_url.dart';
 import '../source/yt_dlp.dart';
+import '../subtitle/bilingual_cue.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
 import '../pipeline/tools.dart';
 import 'file_browser.dart';
@@ -72,6 +73,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
   String _title = 'Transcue';
   bool _loading = false;
 
+  /// 영상을 연 적이 있는지 (열기 전에는 메뉴를 항상 보여 준다)
+  bool _opened = false;
+
+  /// YouTube 열기 버튼 표시 여부 (기능은 남겨 두고 메뉴에서만 숨긴다)
+  final bool _showYoutubeButton = false;
+
+  /// 전체 화면에서도 상단 줄을 갱신하기 위한 알림 ([setState]마다 올린다)
+  final _uiChanged = ValueNotifier<int>(0);
+
+  /// 전체 화면에서 보여 줄 안내 (SnackBar는 전체 화면 뒤에 가려진다)
+  final _flash = ValueNotifier<String?>(null);
+  Timer? _flashTimer;
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _uiChanged.value++;
+  }
+
   /// 지금 재생 중인 로컬 파일 (YouTube면 null) — 연속 재생 기준
   String? _currentPath;
   StreamSubscription<bool>? _completedSub;
@@ -126,6 +146,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (_player.state.playing) unawaited(_rememberPosition());
     });
     _playingSub = _player.stream.playing.listen((p) {
+      if (kDebugMode) debugPrint('[playing] $p');
+      if (p) _pausedByCopy = false;
       if (!p) unawaited(_rememberPosition());
     });
     AppSettings.load().then((s) {
@@ -154,6 +176,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _job?.dispose();
     _view.dispose();
     _playInfo.dispose();
+    _uiChanged.dispose();
+    _flashTimer?.cancel();
+    _flash.dispose();
     if (!_playerClosed) {
       _playerClosed = true;
       _player.dispose();
@@ -163,6 +188,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   void _toast(String msg) {
     if (!mounted) return;
+    if (_videoKey.currentState?.isFullscreen() ?? false) {
+      _flash.value = msg;
+      _flashTimer?.cancel();
+      _flashTimer = Timer(
+        const Duration(seconds: 2),
+        () => _flash.value = null,
+      );
+      return;
+    }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(msg)));
@@ -228,6 +262,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() {
       _title = path.split(Platform.pathSeparator).last;
       _currentPath = path;
+      _opened = true;
     });
     if (kDebugMode) debugPrint('[open] $path');
     _resumeKey = null;
@@ -309,6 +344,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       setState(() {
         _title = media.title;
         _currentPath = null;
+        _opened = true;
       });
       // 고화질은 영상/소리가 따로 온다. 소리는 영상이 실제로 로드된 뒤에 붙여야 한다
       // (open()은 로드 완료 전에 반환되고, 그 사이 mpv audio-add는 조용히 실패함)
@@ -422,6 +458,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _publishPlayInfo();
     await _settings.save();
     _toast(_settings.repeatVideo ? '반복 재생 켜짐 (R)' : '반복 재생 꺼짐 (R)');
+  }
+
+  /// 자막 복사 때문에 멈춘 상태인지 (재생이 다시 시작되면 해제)
+  bool _pausedByCopy = false;
+
+  /// 자막을 누르면 영상을 멈추고 화면에 보이는 줄을 복사한다
+  Future<void> _copyCue(BilingualCue cue) async {
+    // 복사하려고 멈춘 상태에서 자막을 다시 누르면 이어서 재생한다
+    if (_pausedByCopy && !_player.state.playing) {
+      await _player.play();
+      return;
+    }
+    _pausedByCopy = true;
+    await _player.pause();
+    final text = _view.copyText(cue);
+    if (text.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: text));
+    _toast('자막을 복사했습니다');
   }
 
   /// 자막 다시 만들기: 비용이 드는 작업이라 먼저 확인한다
@@ -596,7 +650,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 화면 클릭 = 재생/일시정지 (더블 클릭은 전체 화면)
   late final _controlsTheme = MaterialDesktopVideoControlsThemeData(
     playAndPauseOnTap: true,
+    visibleOnMount: _pinControls,
+    controlsHoverDuration: _pinControls
+        ? const Duration(hours: 1)
+        : const Duration(seconds: 3),
     keyboardShortcuts: _shortcuts,
+    topButtonBar: [Expanded(child: _topBar())],
     bottomButtonBar: [
       const MaterialDesktopSkipPreviousButton(),
       _desktopSeekButton(Icons.replay_10, '10초 뒤로', -10),
@@ -638,7 +697,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
         seekOnDoubleTap: true,
         seekGesture: true,
         displaySeekBar: true,
-        controlsHoverDuration: const Duration(seconds: 4),
+        visibleOnMount: _pinControls,
+        controlsHoverDuration: _pinControls
+            ? const Duration(hours: 1)
+            : const Duration(seconds: 4),
+        topButtonBar: [Expanded(child: _topBar())],
         primaryButtonBar: [
           const Spacer(flex: 2),
           MaterialCustomButton(
@@ -670,145 +733,218 @@ class _PlayerScreenState extends State<PlayerScreen> {
         seekBarThumbColor: const Color(0xFF80DEEA),
       );
 
-  static final bool _touch = Platform.isAndroid || Platform.isIOS;
+  /// 개발용: DUALCUE_PIN_CONTROLS=1 이면 조작부를 계속 띄운다 (화면 검증용)
+  static final bool _pinControls =
+      kDebugMode && Platform.environment['DUALCUE_PIN_CONTROLS'] == '1';
+
+  /// 개발용: DUALCUE_TOUCH=1 이면 데스크톱에서 터치용 조작부를 확인한다
+  static final bool _touch =
+      Platform.isAndroid ||
+      Platform.isIOS ||
+      (kDebugMode && Platform.environment['DUALCUE_TOUCH'] == '1');
+
+  /// 상단 메뉴 버튼. 버튼이 포커스를 가져가면 Space/Enter가 버튼을 누르게 되므로 제외한다.
+  Widget _menuActions() => ExcludeFocus(
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: '원문 자막',
+          icon: Icon(
+            _view.showOriginal ? Icons.subtitles : Icons.subtitles_off,
+          ),
+          onPressed: () =>
+              setState(() => _view.showOriginal = !_view.showOriginal),
+        ),
+        IconButton(
+          tooltip: '번역 자막',
+          icon: Icon(
+            _view.showTranslation
+                ? Icons.translate
+                : Icons.g_translate_outlined,
+          ),
+          onPressed: () =>
+              setState(() => _view.showTranslation = !_view.showTranslation),
+        ),
+        IconButton(
+          tooltip: '학습 단어 (V)',
+          icon: Icon(
+            _settings.showVocab ? Icons.school : Icons.school_outlined,
+            color: _settings.showVocab ? const Color(0xFF80DEEA) : null,
+          ),
+          onPressed: _toggleVocab,
+        ),
+        PopupMenuButton<_Regen>(
+          tooltip: '자막·번역 다시 만들기',
+          icon: const Icon(Icons.restart_alt),
+          enabled: _job != null,
+          onSelected: _confirmRegen,
+          itemBuilder: (_) => [
+            PopupMenuItem(
+              value: _Regen.translation,
+              enabled: _job?.canRetranslate ?? false,
+              child: Text(_Regen.translation.label),
+            ),
+            PopupMenuItem(value: _Regen.fetch, child: Text(_Regen.fetch.label)),
+            if (canTranscribe)
+              PopupMenuItem(
+                value: _Regen.speech,
+                child: Text(_Regen.speech.label),
+              ),
+          ],
+        ),
+        IconButton(
+          tooltip: _settings.repeatVideo ? '반복 재생 켜짐 (R)' : '반복 재생 꺼짐 (R)',
+          icon: Icon(
+            Icons.repeat_one,
+            color: _settings.repeatVideo ? const Color(0xFF80DEEA) : null,
+          ),
+          onPressed: _toggleRepeat,
+        ),
+        IconButton(
+          tooltip: '이전 영상 (P)',
+          icon: const Icon(Icons.skip_previous),
+          onPressed: _currentPath == null ? null : () => _skip(-1),
+        ),
+        IconButton(
+          tooltip: '다음 영상 (N)',
+          icon: const Icon(Icons.skip_next),
+          onPressed: _currentPath == null ? null : () => _skip(1),
+        ),
+        IconButton(
+          tooltip: _settings.autoPlayNext ? '연속 재생 켜짐' : '연속 재생 꺼짐',
+          icon: Icon(
+            _settings.autoPlayNext
+                ? Icons.playlist_play
+                : Icons.playlist_remove,
+            color: _settings.autoPlayNext ? const Color(0xFF80DEEA) : null,
+          ),
+          onPressed: _toggleAutoPlayNext,
+        ),
+        // YouTube는 yt-dlp가 필요해 데스크톱만
+        if (_showYoutubeButton && hasDesktopTools)
+          IconButton(
+            tooltip: 'YouTube 열기',
+            icon: const Icon(Icons.smart_display),
+            onPressed: _loading ? null : _openYoutube,
+          ),
+        IconButton(
+          tooltip: '동영상 열기',
+          icon: const Icon(Icons.folder_open),
+          onPressed: _loading ? null : _openFile,
+        ),
+        IconButton(
+          tooltip: '설정 (Claude API 키)',
+          icon: Icon(
+            Icons.settings,
+            color: _settings.hasClaudeKey ? null : Colors.amber,
+          ),
+          onPressed: _openSettings,
+        ),
+      ],
+    ),
+  );
+
+  /// 영상 위 상단 줄 (제목·진행 상태·메뉴). 하단 조작부와 함께 나타나고 사라진다.
+  /// 전체 화면은 별도 화면이라 setState가 닿지 않으므로 [_uiChanged]를 구독한다.
+  Widget _topBar() => ListenableBuilder(
+    listenable: _uiChanged,
+    builder: (context, _) {
+      // 영상을 열기 전에는 화면 위쪽 앱바에 같은 메뉴가 항상 보인다
+      if (!_opened) return const SizedBox.shrink();
+      final job = _job;
+      final status = job?.status ?? '';
+      final notice = job?.notice;
+      final failed = job?.stage == JobStage.failed;
+      TextStyle line(Color color) => TextStyle(
+        color: color,
+        fontSize: 12,
+        decoration: TextDecoration.none,
+      );
+      return LayoutBuilder(
+        builder: (context, box) => Row(
+          children: [
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                  if (status.isNotEmpty || notice != null)
+                    Row(
+                      children: [
+                        if (status.isNotEmpty)
+                          Flexible(
+                            child: Text(
+                              status,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: line(
+                                failed
+                                    ? Theme.of(context).colorScheme.error
+                                    : Colors.white70,
+                              ),
+                            ),
+                          ),
+                        if (notice != null) ...[
+                          const SizedBox(width: 12),
+                          Flexible(
+                            child: Text(
+                              notice,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: line(Colors.amber),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                ],
+              ),
+            ),
+            PlayCountBadge(info: _playInfo, onReset: _resetCount),
+            // 폭이 좁으면 제목을 남기고 버튼 줄을 가로로 밀 수 있게 한다
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: box.maxWidth * 0.6),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                reverse: true,
+                child: _menuActions(),
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 
   @override
   Widget build(BuildContext context) {
-    final job = _job;
     // 툴바 버튼 등 영상 밖에 포커스가 있어도 Space/Enter로 재생/일시정지
     return CallbackShortcuts(
       bindings: _shortcuts,
       child: Focus(
         autofocus: true,
         child: Scaffold(
-          appBar: AppBar(
-            title: Text(_title, overflow: TextOverflow.ellipsis),
-            actions: [
-              // 툴바 버튼이 포커스를 가져가면 Space/Enter가 버튼을 누르게 되므로 제외
-              ExcludeFocus(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: '원문 자막',
-                      icon: Icon(
-                        _view.showOriginal
-                            ? Icons.subtitles
-                            : Icons.subtitles_off,
-                      ),
-                      onPressed: () => setState(
-                        () => _view.showOriginal = !_view.showOriginal,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '번역 자막',
-                      icon: Icon(
-                        _view.showTranslation
-                            ? Icons.translate
-                            : Icons.g_translate_outlined,
-                      ),
-                      onPressed: () => setState(
-                        () => _view.showTranslation = !_view.showTranslation,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '학습 단어 (V)',
-                      icon: Icon(
-                        _settings.showVocab
-                            ? Icons.school
-                            : Icons.school_outlined,
-                        color: _settings.showVocab
-                            ? const Color(0xFF80DEEA)
-                            : null,
-                      ),
-                      onPressed: _toggleVocab,
-                    ),
-                    PopupMenuButton<_Regen>(
-                      tooltip: '자막·번역 다시 만들기',
-                      icon: const Icon(Icons.restart_alt),
-                      enabled: job != null,
-                      onSelected: _confirmRegen,
-                      itemBuilder: (_) => [
-                        PopupMenuItem(
-                          value: _Regen.translation,
-                          enabled: job?.canRetranslate ?? false,
-                          child: Text(_Regen.translation.label),
-                        ),
-                        PopupMenuItem(
-                          value: _Regen.fetch,
-                          child: Text(_Regen.fetch.label),
-                        ),
-                        if (canTranscribe)
-                          PopupMenuItem(
-                            value: _Regen.speech,
-                            child: Text(_Regen.speech.label),
-                          ),
-                      ],
-                    ),
-                    IconButton(
-                      tooltip: _settings.repeatVideo
-                          ? '반복 재생 켜짐 (R)'
-                          : '반복 재생 꺼짐 (R)',
-                      icon: Icon(
-                        Icons.repeat_one,
-                        color: _settings.repeatVideo
-                            ? const Color(0xFF80DEEA)
-                            : null,
-                      ),
-                      onPressed: _toggleRepeat,
-                    ),
-                    IconButton(
-                      tooltip: '이전 영상 (P)',
-                      icon: const Icon(Icons.skip_previous),
-                      onPressed: _currentPath == null ? null : () => _skip(-1),
-                    ),
-                    IconButton(
-                      tooltip: '다음 영상 (N)',
-                      icon: const Icon(Icons.skip_next),
-                      onPressed: _currentPath == null ? null : () => _skip(1),
-                    ),
-                    IconButton(
-                      tooltip: _settings.autoPlayNext ? '연속 재생 켜짐' : '연속 재생 꺼짐',
-                      icon: Icon(
-                        _settings.autoPlayNext
-                            ? Icons.playlist_play
-                            : Icons.playlist_remove,
-                        color: _settings.autoPlayNext
-                            ? const Color(0xFF80DEEA)
-                            : null,
-                      ),
-                      onPressed: _toggleAutoPlayNext,
-                    ),
-                    // YouTube는 yt-dlp가 필요해 데스크톱만
-                    if (hasDesktopTools)
-                      IconButton(
-                        tooltip: 'YouTube 열기',
-                        icon: const Icon(Icons.smart_display),
-                        onPressed: _loading ? null : _openYoutube,
-                      ),
-                    IconButton(
-                      tooltip: '동영상 열기',
-                      icon: const Icon(Icons.folder_open),
-                      onPressed: _loading ? null : _openFile,
-                    ),
-                    IconButton(
-                      tooltip: '설정 (Claude API 키)',
-                      icon: Icon(
-                        Icons.settings,
-                        color: _settings.hasClaudeKey ? null : Colors.amber,
-                      ),
-                      onPressed: _openSettings,
-                    ),
-                  ],
+          appBar: _opened
+              ? null
+              : AppBar(
+                  title: Text(_title, overflow: TextOverflow.ellipsis),
+                  actions: [_menuActions()],
                 ),
-              ),
-            ],
-            bottom: job == null ? null : _JobStatusBar(job: job),
-          ),
           // Android 15+는 화면 끝까지 그리므로 아래 작업 표시줄·내비게이션 바를 피한다
           // (안 피하면 슬라이드 바·시간·자막 아래쪽이 작업 표시줄에 가려짐)
           body: SafeArea(
-            top: false,
+            top: _opened, // 앱바가 없으면 상단 상태 표시줄도 직접 피한다
             child: Stack(
               children: [
                 // media_kit 내장 자막 렌더링은 끄고 자체 오버레이를 사용한다.
@@ -826,18 +962,37 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       // controls 빌더는 전체 화면에서도 다시 쓰이므로 자막을 여기에 넣는다
                       controls: (state) => Stack(
                         children: [
-                          LiveDualSubtitle(
-                            position: _player.stream.position,
-                            currentPosition: () => _player.state.position,
-                            view: _view,
-                          ),
                           if (_touch)
                             MaterialVideoControls(state)
                           else
                             MaterialDesktopVideoControls(state),
                           // 위로 밀면 소리 크게, 아래로 밀면 작게 (조작부 위에 겹침)
                           if (Platform.isAndroid) const VolumeDragLayer(),
-                          PlayCountBadge(info: _playInfo, onReset: _resetCount),
+                          // 자막 상자가 클릭을 받도록 조작부 위에 둔다 (상자 밖은 통과)
+                          LiveDualSubtitle(
+                            position: _player.stream.position,
+                            currentPosition: () => _player.state.position,
+                            view: _view,
+                            onTapCue: _copyCue,
+                          ),
+                          // 전체 화면 안내는 상단 줄과 겹치지 않게 그 아래에 둔다
+                          Positioned(
+                            top: 56,
+                            left: 0,
+                            right: 0,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                ValueListenableBuilder(
+                                  valueListenable: _flash,
+                                  builder: (context, msg, _) => msg == null
+                                      ? const SizedBox.shrink()
+                                      : _OverlayMessage(msg),
+                                ),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -853,61 +1008,31 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 }
 
-/// 자막 생성/번역 진행 상태 (앱바 아래)
-class _JobStatusBar extends StatelessWidget implements PreferredSizeWidget {
-  const _JobStatusBar({required this.job});
+/// 전체 화면에서 잠깐 보여 주는 안내
+class _OverlayMessage extends StatelessWidget {
+  const _OverlayMessage(this.text);
 
-  final SubtitleJob job;
-
-  @override
-  Size get preferredSize => const Size.fromHeight(30);
+  final String text;
 
   @override
-  Widget build(BuildContext context) {
-    final busy = job.stage != JobStage.done && job.stage != JobStage.failed;
-    final color = job.stage == JobStage.failed
-        ? Theme.of(context).colorScheme.error
-        : null;
-    final notice = job.notice;
-    return SizedBox(
-      height: 30,
-      child: Column(
-        children: [
-          if (busy)
-            LinearProgressIndicator(value: job.progress, minHeight: 2)
-          else
-            const SizedBox(height: 2),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      job.status,
-                      style: TextStyle(fontSize: 12, color: color),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (notice != null)
-                    Flexible(
-                      child: Text(
-                        notice,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.amber,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ],
+  Widget build(BuildContext context) => IgnorePointer(
+    child: Container(
+      margin: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0x99000000),
+        borderRadius: BorderRadius.circular(8),
       ),
-    );
-  }
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          decoration: TextDecoration.none,
+        ),
+      ),
+    ),
+  );
 }
 
 class _YoutubeUrlDialog extends StatefulWidget {
