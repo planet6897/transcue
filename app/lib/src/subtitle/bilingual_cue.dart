@@ -120,6 +120,13 @@ class BilingualCue {
   );
 }
 
+/// 글자의 절반 이상이 한글인 문장 (번역할 필요가 없다)
+bool isMostlyKorean(String text) {
+  final letters = RegExp(r'\p{L}', unicode: true).allMatches(text).length;
+  if (letters == 0) return false;
+  return RegExp('[가-힣]').allMatches(text).length * 2 >= letters;
+}
+
 /// 인코딩이 잘못되어 깨진 한국어인지 (한글 없이 라틴 확장 문자·대체 문자만 있는 줄)
 bool isBrokenKorean(String text) =>
     RegExp(r'[\u0080-\u00ff\ufffd]').hasMatch(text) &&

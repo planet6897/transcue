@@ -62,6 +62,10 @@ enum JobRefresh {
 ///
 /// 순서: 캐시 → (내장 자막 | YouTube 자막) → 없으면 음성 추출 + whisper STT
 ///       → 한국어가 없는 줄은 Claude 번역. STT/번역 결과는 생기는 대로 [cues]에 반영.
+/// 구간마다 감지한 언어를 합친다. 영상 안에서 언어가 바뀌면 'auto'가 된다.
+String mergeSpokenLang(String? current, String detected) =>
+    current == null || current == detected ? detected : 'auto';
+
 class SubtitleJob extends ChangeNotifier {
   SubtitleJob({
     required this.source,
@@ -806,6 +810,9 @@ class SubtitleJob extends ChangeNotifier {
     return '음성 인식 ${(fraction * 100).toStringAsFixed(0)}% · ${cues.length}줄$trans$chunk';
   }
 
+  /// 음성 인식이 마지막으로 믿은 언어
+  String? _spokenLang;
+
   Future<void> _speechToText() async {
     if (!canTranscribe) {
       originalFrom = '자막 없음';
@@ -891,7 +898,9 @@ class SubtitleJob extends ChangeNotifier {
             length: Duration(milliseconds: readEnd - start),
             model: model,
             vadModel: vad,
-            language: sourceLang ?? 'auto',
+            // 영상 안에서 언어가 바뀔 수 있으므로 구간마다 새로 감지한다
+            language: 'auto',
+            fallbackLanguage: _spokenLang,
             tmp: tmp,
           )) {
             switch (ev) {
@@ -910,7 +919,9 @@ class SubtitleJob extends ChangeNotifier {
                 final p = (_coveredMs + fraction * (hardEnd - start)) / total;
                 _set(JobStage.transcribing, _sttStatus(p), p);
               case SttLanguage(:final code):
-                sourceLang ??= code;
+                debugPrint('[stt] language $code');
+                _spokenLang = code;
+                sourceLang = mergeSpokenLang(sourceLang, code);
             }
           }
         } finally {
@@ -946,7 +957,8 @@ class SubtitleJob extends ChangeNotifier {
 
   /// 번역이 필요한 줄: 번역이 없거나 사용자가 다시 번역을 요청한 줄
   bool _wantsTranslation(BilingualCue c) =>
-      c.translation == null || (c.provisional && settings.hasClaudeKey);
+      !isMostlyKorean(c.original) &&
+      (c.translation == null || (c.provisional && settings.hasClaudeKey));
 
   int get _translatedCount =>
       cues.where((c) => c.translation != null && !_wantsTranslation(c)).length;

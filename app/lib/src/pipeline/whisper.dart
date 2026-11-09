@@ -177,7 +177,30 @@ BilingualCue? parseWhisperLine(String line) {
 }
 
 final _progressRe = RegExp(r'progress\s*=\s*(\d+)%');
-final _langRe = RegExp(r'auto-detected language:\s*([a-z]{2,3})');
+final _langRe = RegExp(
+  r'auto-detected language:\s*([a-z]{2,3})(?:\s*\(p\s*=\s*([\d.]+))?',
+);
+
+/// 언어가 바뀌었다고 믿을 최소 확신도. 말이 적은 구간은 0.5~0.7로 엉뚱한 언어가 나온다.
+const minLanguageConfidence = 0.8;
+
+/// whisper-cli 로그 한 줄에서 감지한 언어와 확신도를 읽는다
+(String, double?)? parseDetectedLanguage(String line) {
+  final m = _langRe.firstMatch(line);
+  if (m == null) return null;
+  return (m[1]!, m[2] == null ? null : double.tryParse(m[2]!));
+}
+
+/// 확신이 낮은데 직전 언어와 다르면 잘못 감지한 것으로 보고 직전 언어로 다시 인식한다
+bool shouldRetryLanguage(
+  String detected,
+  double? confidence,
+  String? fallback,
+) =>
+    fallback != null &&
+    detected != fallback &&
+    confidence != null &&
+    confidence < minLanguageConfidence;
 
 sealed class SttEvent {}
 
@@ -205,6 +228,7 @@ Stream<SttEvent> transcribe({
   required File model,
   File? vadModel,
   String language = 'auto',
+  String? fallbackLanguage,
 }) async* {
   final args = [
     '-m',
@@ -232,6 +256,7 @@ Stream<SttEvent> transcribe({
   final p = await Process.start(await whisperCli(), args);
   final events = StreamController<SttEvent>();
   final errTail = <String>[];
+  var retry = false;
 
   final out = p.stdout
       .transform(lenientUtf8.decoder)
@@ -246,8 +271,15 @@ Stream<SttEvent> transcribe({
       .listen((l) {
         final pm = _progressRe.firstMatch(l);
         if (pm != null) events.add(SttProgress(int.parse(pm[1]!) / 100));
-        final lm = _langRe.firstMatch(l);
-        if (lm != null) events.add(SttLanguage(lm[1]!));
+        final lang = parseDetectedLanguage(l);
+        if (lang != null) {
+          if (shouldRetryLanguage(lang.$1, lang.$2, fallbackLanguage)) {
+            retry = true;
+            p.kill();
+          } else {
+            events.add(SttLanguage(lang.$1));
+          }
+        }
         errTail.add(l);
         if (errTail.length > 5) errTail.removeAt(0);
       });
@@ -255,7 +287,7 @@ Stream<SttEvent> transcribe({
   unawaited(
     Future.wait([out.asFuture<void>(), err.asFuture<void>()]).then((_) async {
       final code = await p.exitCode;
-      if (code != 0) {
+      if (code != 0 && !retry) {
         events.addError(
           ProcessException('whisper-cli', args, errTail.join('\n'), code),
         );
@@ -264,4 +296,13 @@ Stream<SttEvent> transcribe({
     }),
   );
   yield* events.stream;
+  if (retry) {
+    debugPrint('[stt] low-confidence language, retry as $fallbackLanguage');
+    yield* transcribe(
+      wavPath: wavPath,
+      model: model,
+      vadModel: vadModel,
+      language: fallbackLanguage!,
+    );
+  }
 }
