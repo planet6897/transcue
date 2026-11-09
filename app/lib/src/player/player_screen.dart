@@ -550,6 +550,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
     unawaited(_job?.retranslate());
   }
 
+  /// PopupMenuButton은 메뉴가 떠 있는 사이 조작부가 자동으로 사라져 버튼이 없어지면
+  /// 고른 항목을 버린다. 그래서 메뉴를 직접 띄워 결과를 받는다.
+  Future<void> _showRegenMenu(BuildContext button) async {
+    final box = button.findRenderObject()! as RenderBox;
+    final overlay =
+        Navigator.of(button).overlay!.context.findRenderObject()! as RenderBox;
+    final regen = await showMenu<_Regen>(
+      context: button,
+      position: RelativeRect.fromRect(
+        box.localToGlobal(Offset.zero, ancestor: overlay) & box.size,
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        PopupMenuItem(value: _Regen.fetch, child: Text(_Regen.fetch.label)),
+        if (canTranscribe)
+          PopupMenuItem(value: _Regen.speech, child: Text(_Regen.speech.label)),
+      ],
+    );
+    if (regen != null && mounted) await _confirmRegen(regen);
+  }
+
   /// 자막 다시 만들기: 비용이 드는 작업이라 먼저 확인한다
   Future<void> _confirmRegen(_Regen regen) async {
     final job = _job;
@@ -943,19 +964,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
           icon: const Icon(Icons.auto_awesome),
           onPressed: _job?.canRetranslate ?? false ? _retranslate : null,
         ),
-        PopupMenuButton<_Regen>(
-          tooltip: '자막·번역 다시 만들기',
-          icon: const Icon(Icons.restart_alt),
-          enabled: _job != null,
-          onSelected: _confirmRegen,
-          itemBuilder: (_) => [
-            PopupMenuItem(value: _Regen.fetch, child: Text(_Regen.fetch.label)),
-            if (canTranscribe)
-              PopupMenuItem(
-                value: _Regen.speech,
-                child: Text(_Regen.speech.label),
-              ),
-          ],
+        Builder(
+          builder: (button) => IconButton(
+            tooltip: '자막·번역 다시 만들기',
+            icon: const Icon(Icons.restart_alt),
+            onPressed: _job == null ? null : () => _showRegenMenu(button),
+          ),
         ),
         IconButton(
           tooltip: _settings.repeatVideo ? '반복 재생 켜짐 (R)' : '반복 재생 꺼짐 (R)',
