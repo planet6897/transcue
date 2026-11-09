@@ -9,7 +9,9 @@
 
 ## 개발 환경
 
-필요: Flutter 3.41+, 외부 도구 `brew install ffmpeg whisper-cpp yt-dlp` (Windows: `winget install ffmpeg yt-dlp` + whisper.cpp 릴리스), Rust 1.93 (`rust-toolchain.toml`로 고정), Xcode(macOS) / Visual Studio 2022 C++ 워크로드(Windows)
+필요: Flutter 3.41+, 외부 도구 `brew install ffmpeg whisper-cpp yt-dlp` (Windows: `powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1`), Rust 1.93 (`rust-toolchain.toml`로 고정), Xcode(macOS) / Visual Studio 2022 C++ 워크로드(Windows)
+
+Windows에서는 프로젝트를 **NTFS 드라이브**에 두고 **개발자 모드**를 켜야 합니다. Flutter 플러그인 빌드에 심볼릭 링크가 필요해서 exFAT/FAT32 드라이브에서는 빌드할 수 없습니다.
 
 ```bash
 # 앱 실행

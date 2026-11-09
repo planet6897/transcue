@@ -147,14 +147,14 @@ Stream<SttEvent> transcribe({
   final errTail = <String>[];
 
   final out = p.stdout
-      .transform(utf8.decoder)
+      .transform(lenientUtf8.decoder)
       .transform(const LineSplitter())
       .listen((l) {
         final c = parseWhisperLine(l);
         if (c != null) events.add(SttCue(c));
       });
   final err = p.stderr
-      .transform(utf8.decoder)
+      .transform(lenientUtf8.decoder)
       .transform(const LineSplitter())
       .listen((l) {
         final pm = _progressRe.firstMatch(l);

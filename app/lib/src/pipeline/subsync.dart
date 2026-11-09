@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -56,7 +55,7 @@ List<(int, int)> parseVadSegments(String out) {
 Future<List<(int, int)>> detectSpeech(String wavPath, File vadModel) async {
   final exe = await findTool(
     'whisper-vad-speech-segments',
-    install: 'brew install whisper-cpp',
+    install: whisperInstallHint,
   );
   final r = await Process.run(exe, [
     '-f',
@@ -64,7 +63,7 @@ Future<List<(int, int)>> detectSpeech(String wavPath, File vadModel) async {
     '-vm',
     vadModel.path,
     '-np',
-  ], stdoutEncoding: utf8);
+  ], stdoutEncoding: lenientUtf8);
   if (r.exitCode != 0) {
     throw ProcessException(exe, [], '${r.stderr}'.trim(), r.exitCode);
   }

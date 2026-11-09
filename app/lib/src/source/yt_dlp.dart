@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../pipeline/tools.dart';
 import 'youtube_url.dart';
 
 /// yt-dlp가 알려준 자막 트랙 하나.
@@ -211,28 +212,7 @@ class YtDlp {
   /// 명시 경로. null이면 [locate]로 찾는다.
   final String? executable;
 
-  static const _candidates = [
-    '/opt/homebrew/bin/yt-dlp', // macOS GUI 앱은 셸 PATH를 물려받지 않는다
-    '/usr/local/bin/yt-dlp',
-  ];
-
-  Future<String?> locate() async {
-    if (executable != null) return executable;
-    for (final p in _candidates) {
-      if (await File(p).exists()) return p;
-    }
-    try {
-      final r = await Process.run(Platform.isWindows ? 'where' : 'which', [
-        'yt-dlp',
-      ]);
-      if (r.exitCode == 0) {
-        return (r.stdout as String).split(RegExp(r'\r?\n')).first.trim();
-      }
-    } on ProcessException {
-      // 무시
-    }
-    return null;
-  }
+  Future<String?> locate() async => executable ?? await locateTool('yt-dlp');
 
   Future<String> _exe() async {
     final exe = await locate();
@@ -251,7 +231,7 @@ class YtDlp {
       '--no-warnings',
       '--no-cache-dir',
       ...args,
-    ], stdoutEncoding: utf8);
+    ], stdoutEncoding: lenientUtf8);
     if (r.exitCode != 0) {
       throw YtDlpException('yt-dlp 실패: ${(r.stderr as String).trim()}');
     }
@@ -312,7 +292,7 @@ class YtDlp {
       }
       return await file.readAsString();
     } finally {
-      await dir.delete(recursive: true);
+      await deleteTempDir(dir);
     }
   }
 }

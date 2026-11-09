@@ -92,7 +92,7 @@ class MediaInfo {
 }
 
 Future<String> _run(String exe, List<String> args) async {
-  final r = await Process.run(exe, args, stdoutEncoding: utf8);
+  final r = await Process.run(exe, args, stdoutEncoding: lenientUtf8);
   if (r.exitCode != 0) {
     final err = '${r.stderr}'.trim().split('\n').last;
     throw ProcessException(exe, args, err, r.exitCode);
@@ -176,9 +176,11 @@ Future<void> extractAudio(
   ];
   final p = await Process.start(await ffmpeg(), args);
   final err = StringBuffer();
-  p.stderr.transform(utf8.decoder).listen(err.write);
+  p.stderr.transform(lenientUtf8.decoder).listen(err.write);
   await for (final line
-      in p.stdout.transform(utf8.decoder).transform(const LineSplitter())) {
+      in p.stdout
+          .transform(lenientUtf8.decoder)
+          .transform(const LineSplitter())) {
     // out_time_us=123456789
     if (duration != null && line.startsWith('out_time_us=')) {
       final us = int.tryParse(line.substring(12));

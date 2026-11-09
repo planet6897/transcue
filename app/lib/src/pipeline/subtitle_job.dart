@@ -532,7 +532,7 @@ class SubtitleJob extends ChangeNotifier {
       debugPrint('auto sync failed: $e');
       syncInfo = '싱크 자동 보정 실패';
     } finally {
-      await tmp.delete(recursive: true);
+      await deleteTempDir(tmp);
     }
   }
 
@@ -795,7 +795,7 @@ class SubtitleJob extends ChangeNotifier {
         _kickTranslation(); // 이 조각을 바로 번역 (다음 조각 인식과 동시에)
       }
     } finally {
-      await tmp.delete(recursive: true);
+      await deleteTempDir(tmp);
     }
   }
 
