@@ -304,6 +304,7 @@ class SubtitleJob extends ChangeNotifier {
       if (stage != JobStage.failed) {
         _set(JobStage.done, _summary());
       }
+      unawaited(_liveSyncLoop());
     } catch (e, st) {
       debugPrint('SubtitleJob failed: $e\n$st');
       _set(JobStage.failed, '자막 생성 실패: $e');
@@ -569,6 +570,75 @@ class SubtitleJob extends ChangeNotifier {
     manualOffset += d;
     _setCues(shiftCues(cues, d));
     await _saveCache();
+  }
+
+  // ---- 실시간 싱크 ----
+
+  static const _liveInterval = Duration(seconds: 15);
+  static const _liveWindow = Duration(seconds: 45);
+
+  /// 받아 온 자막만 대상이다 (음성 인식 자막은 같은 음성에서 만들어 이미 맞다).
+  /// 판본이 다른 자막은 광고 구간 등에서 어긋나는 양이 구간마다 달라
+  /// 영상 전체에 한 번 적용하는 [_autoSync]만으로는 맞출 수 없다.
+  bool get _canLiveSync =>
+      hasDesktopTools &&
+      source is LocalFileSource &&
+      originalFrom != fromStt &&
+      cues.isNotEmpty;
+
+  /// 재생 중 앞으로 나올 구간의 음성과 자막을 계속 비교해 어긋나면 그 지점부터 옮긴다.
+  Future<void> _liveSyncLoop() async {
+    if (!_canLiveSync) return;
+    final path = (source as LocalFileSource).path;
+    final tmp = await Directory.systemTemp.createTemp('transcue_live_');
+    try {
+      final vad = await ensureVadModel();
+      final wav = '${tmp.path}/live.wav';
+      final tracker = LiveSyncTracker();
+      var last = playhead();
+      while (!_disposed) {
+        await Future<void>.delayed(_liveInterval);
+        if (_disposed) break;
+        final now = playhead();
+        final moved = now - last;
+        last = now;
+        // 앞뒤로 건너뛰었으면 다른 구간이므로 이전 측정값을 버린다
+        if (moved.isNegative || moved > _liveInterval * 2) tracker.reset();
+        if (moved < const Duration(seconds: 5)) continue; // 일시정지
+        // 사용자가 직접 맞춘 뒤에는 건드리지 않는다.
+        // 번역 중에 옮기면 진행 중인 줄의 결과를 찾지 못한다
+        if (manualOffset != Duration.zero ||
+            _loop != null ||
+            _vocabLoop != null) {
+          continue;
+        }
+        final end = now + _liveWindow;
+        final near = [
+          for (final c in cues)
+            if (c.start >= now && c.start < end) c,
+        ];
+        try {
+          await extractAudio(path, wav, start: now, length: _liveWindow);
+          final speech = await detectSpeech(wav, vad);
+          final measured = estimateLocalOffset(shiftCues(near, -now), speech);
+          debugPrint('[live-sync] at ${now.inSeconds}s measured $measured');
+          final offset = tracker.add(measured);
+          if (offset == null || _disposed) continue;
+          _setCues(shiftCuesFrom(cues, now, offset));
+          final s = offset.inMilliseconds / 1000;
+          syncInfo = '실시간 보정 ${s >= 0 ? '+' : ''}${s.toStringAsFixed(1)}초';
+          debugPrint('[live-sync] applied $offset from ${now.inSeconds}s');
+          await _saveCache();
+          if (stage == JobStage.done) _set(JobStage.done, _summary());
+        } on Exception catch (e) {
+          debugPrint('live sync check failed: $e');
+        }
+      }
+    } on Exception catch (e) {
+      debugPrint('live sync stopped: $e');
+    } finally {
+      await deleteTempDir(tmp);
+    }
   }
 
   /// OpenSubtitles에서 원어/한국어 자막을 찾는다. 원어를 찾으면 true.

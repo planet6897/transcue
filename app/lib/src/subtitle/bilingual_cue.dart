@@ -138,3 +138,34 @@ BilingualCue? cueAt(
   }
   return t < until ? c : null;
 }
+
+/// 문장 단위로 이동할 때 문장 시작보다 이만큼 앞에서 재생한다 (첫소리를 잘 듣도록)
+const sentenceLeadIn = Duration(milliseconds: 500);
+
+/// 이 시간이 지난 문장에서 뒤로 가면 이전 문장 대신 그 문장의 처음으로 돌아간다
+const _restartAfter = Duration(seconds: 1);
+
+/// [pos]에서 [direction](1: 다음, -1: 이전) 문장으로 갈 재생 위치. 갈 문장이 없으면 null.
+Duration? sentenceSeekTarget(
+  List<BilingualCue> cues,
+  Duration pos,
+  int direction,
+) {
+  // 앞서 문장 시작보다 앞으로 옮겨 온 경우에도 그 문장에 있는 것으로 본다
+  final at = pos + sentenceLeadIn + const Duration(milliseconds: 50);
+  var current = -1;
+  for (var i = 0; i < cues.length && cues[i].start <= at; i++) {
+    current = i;
+  }
+  final int target;
+  if (direction > 0) {
+    target = current + 1;
+    if (target >= cues.length) return null;
+  } else {
+    if (current < 0) return null;
+    final restart = at - cues[current].start > _restartAfter + sentenceLeadIn;
+    target = restart || current == 0 ? current : current - 1;
+  }
+  final t = cues[target].start - sentenceLeadIn;
+  return t < Duration.zero ? Duration.zero : t;
+}
