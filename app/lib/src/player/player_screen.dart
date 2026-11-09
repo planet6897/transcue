@@ -21,6 +21,7 @@ import '../pipeline/tools.dart';
 import 'file_browser.dart';
 import 'play_counts.dart';
 import 'playlist.dart';
+import 'recent_videos.dart';
 import 'resume.dart';
 import 'volume_gesture.dart';
 
@@ -108,6 +109,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     count: 0,
   ));
   PlayCounts? _counts;
+  RecentVideos? _recent;
   String? _countKey;
 
   /// 앱 종료 전에 플레이어를 먼저 닫는다.
@@ -267,6 +269,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (kDebugMode) debugPrint('[open] $path');
     _resumeKey = null;
     await _beginCount(PlaybackPositions.keyForPath(path));
+    unawaited(_rememberRecent(path, _title));
     final loaded = _durationLoaded();
     await _player.open(Media(path));
     // 자막 작업은 재생 위치부터 시작하므로 이어 보기 위치로 먼저 옮긴다
@@ -351,6 +354,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       await _rememberPosition();
       _resumeKey = null;
       await _beginCount(PlaybackPositions.keyForYoutube(id));
+      unawaited(_rememberRecent(youtubeWatchUrl(id), media.title));
       final loaded = _player.stream.duration
           .firstWhere((d) => d > Duration.zero)
           .timeout(const Duration(seconds: 30));
@@ -417,6 +421,48 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     }
     _resumeKey = key; // 옮긴 뒤부터 기록 (옮기기 전 0초가 기록되지 않게)
+  }
+
+  Future<RecentVideos> _recentStore() async => _recent ??= RecentVideos(
+    File('${(await AppSettings.supportDir()).path}/recent.json'),
+  );
+
+  Future<void> _rememberRecent(String source, String title) async =>
+      (await _recentStore()).add(source, title);
+
+  /// 최근 재생목록을 보여 주고 고른 영상을 연다
+  Future<void> _showRecent() async {
+    await _rememberPosition(); // 지금 보던 위치도 목록에 반영
+    final store = await _recentStore();
+    final positions = await _positionStore();
+    final counts = await _countStore();
+    final rows = <RecentRow>[];
+    for (final v in await store.list()) {
+      final id = parseYoutubeId(v.source);
+      final key = id != null
+          ? PlaybackPositions.keyForYoutube(id)
+          : PlaybackPositions.keyForPath(v.source);
+      rows.add(
+        RecentRow(
+          video: v,
+          resumeAt: await positions.get(key),
+          playCount: await counts.get(key),
+          available: id != null || await File(v.source).exists(),
+        ),
+      );
+    }
+    if (!mounted) return;
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (_) => RecentVideosDialog(
+        rows: rows,
+        onRemove: (s) => unawaited(store.remove(s)),
+      ),
+    );
+    if (picked == null) return;
+    await (parseYoutubeId(picked) != null
+        ? _openYoutubeUrl(picked)
+        : _openPath(picked));
   }
 
   Future<PlayCounts> _countStore() async => _counts ??= PlayCounts(
@@ -663,14 +709,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _player.seek(target);
   }
 
+  DateTime _lastVideoClick = DateTime(0);
+
+  /// 영상 클릭 = 재생/일시정지, 더블 클릭 = 전체 화면
+  void _onVideoClick() {
+    _player.playOrPause();
+    final now = DateTime.now();
+    if (now.difference(_lastVideoClick).inMilliseconds < 400) {
+      _videoKey.currentState?.toggleFullscreen();
+    }
+    _lastVideoClick = now;
+  }
+
   void _seekBy(Duration d) {
     final p = _player.state.position + d;
     _player.seek(p < Duration.zero ? Duration.zero : p);
   }
 
-  /// 화면 클릭 = 재생/일시정지 (더블 클릭은 전체 화면)
+  /// 영상 클릭은 [_onVideoClick]이 처리한다. 조작부의 자체 재생/일시정지는 누르는 순간
+  /// 동작해서 상단 메뉴 버튼을 눌러도 영상이 멈춘다.
   late final _controlsTheme = MaterialDesktopVideoControlsThemeData(
-    playAndPauseOnTap: true,
+    playAndPauseOnTap: false,
+    toggleFullscreenOnDoublePress: false,
     visibleOnMount: _pinControls,
     controlsHoverDuration: _pinControls
         ? const Duration(hours: 1)
@@ -864,6 +924,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
             onPressed: _loading ? null : _openYoutube,
           ),
         IconButton(
+          tooltip: '최근 재생목록',
+          icon: const Icon(Icons.history),
+          onPressed: _loading ? null : _showRecent,
+        ),
+        IconButton(
           tooltip: '동영상 열기',
           icon: const Icon(Icons.folder_open),
           onPressed: _loading ? null : _openFile,
@@ -1003,6 +1068,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             MaterialDesktopVideoControls(state),
                           // 위로 밀면 소리 크게, 아래로 밀면 작게 (조작부 위에 겹침)
                           if (Platform.isAndroid) const VolumeDragLayer(),
+                          // 상단 메뉴와 하단 조작부를 뺀 영상 영역의 클릭.
+                          // 통과형이라 마우스를 올렸을 때 조작부도 그대로 나타난다
+                          if (!_touch)
+                            Positioned(
+                              top: 56,
+                              left: 0,
+                              right: 0,
+                              bottom: 84,
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.translucent,
+                                onTap: _onVideoClick,
+                              ),
+                            ),
                           // 자막 상자가 클릭을 받도록 조작부 위에 둔다 (상자 밖은 통과)
                           LiveDualSubtitle(
                             position: _player.stream.position,
