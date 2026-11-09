@@ -36,6 +36,12 @@ class DualSubtitleState extends ChangeNotifier {
     _showTranslation = v;
     notifyListeners();
   }
+
+  /// [cue]에서 지금 화면에 보이는 줄만 복사용 글로 만든다.
+  String copyText(BilingualCue cue) => [
+    if (_showOriginal) cue.original,
+    if (_showTranslation && cue.translation != null) cue.translation!,
+  ].join('\n');
 }
 
 /// 자막이 끝난 뒤 더 보여 주는 시간 (다음 자막이 먼저 시작하면 거기까지)
@@ -48,7 +54,11 @@ class LiveDualSubtitle extends StatelessWidget {
     required this.position,
     required this.currentPosition,
     required this.view,
+    this.onTapCue,
   });
+
+  /// 자막을 눌렀을 때. 자막 상자 밖의 클릭은 아래 조작부로 그대로 전달된다.
+  final ValueChanged<BilingualCue>? onTapCue;
 
   /// 재생 위치 스트림 (player.stream.position)
   final Stream<Duration> position;
@@ -59,22 +69,21 @@ class LiveDualSubtitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: ListenableBuilder(
-        listenable: view,
-        builder: (context, _) => StreamBuilder<Duration>(
-          stream: position,
-          initialData: currentPosition(),
-          builder: (context, snap) => DualSubtitleOverlay(
-            cue: cueAt(
-              view.cues,
-              snap.data ?? Duration.zero,
-              linger: lingerAfterCue,
-            ),
-            showOriginal: view.showOriginal,
-            showTranslation: view.showTranslation,
-            showVocab: view.showVocab,
+    return ListenableBuilder(
+      listenable: view,
+      builder: (context, _) => StreamBuilder<Duration>(
+        stream: position,
+        initialData: currentPosition(),
+        builder: (context, snap) => DualSubtitleOverlay(
+          cue: cueAt(
+            view.cues,
+            snap.data ?? Duration.zero,
+            linger: lingerAfterCue,
           ),
+          showOriginal: view.showOriginal,
+          showTranslation: view.showTranslation,
+          showVocab: view.showVocab,
+          onTapCue: onTapCue,
         ),
       ),
     );
@@ -90,8 +99,10 @@ class DualSubtitleOverlay extends StatelessWidget {
     this.showOriginal = true,
     this.showTranslation = true,
     this.showVocab = false,
+    this.onTapCue,
   });
 
+  final ValueChanged<BilingualCue>? onTapCue;
   final BilingualCue? cue;
   final bool showOriginal;
   final bool showTranslation;
@@ -122,118 +133,134 @@ class DualSubtitleOverlay extends StatelessWidget {
               24,
               (h * 0.09).clamp(48.0, 110.0),
             ),
-            child: Container(
-              padding: EdgeInsets.symmetric(
-                horizontal: size * 0.5,
-                vertical: size * 0.3,
-              ),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.55),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (showOriginal)
-                    Text.rich(
-                      TextSpan(
-                        children: [
-                          // 학습 단어는 원문에서 색으로 강조
-                          for (final (t, hl) in highlightSegments(c.original, [
-                            for (final w in words) w.text,
-                          ]))
-                            TextSpan(
-                              text: t,
-                              style: hl
-                                  ? const TextStyle(
-                                      color: _vocabColor,
-                                      decoration: TextDecoration.underline,
-                                      decorationColor: _vocabColor,
-                                    )
-                                  : null,
-                            ),
-                        ],
+            child: _tappable(
+              c,
+              Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: size * 0.5,
+                  vertical: size * 0.3,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (showOriginal)
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            // 학습 단어는 원문에서 색으로 강조
+                            for (final (t, hl) in highlightSegments(
+                              c.original,
+                              [for (final w in words) w.text],
+                            ))
+                              TextSpan(
+                                text: t,
+                                style: hl
+                                    ? const TextStyle(
+                                        color: _vocabColor,
+                                        decoration: TextDecoration.underline,
+                                        decorationColor: _vocabColor,
+                                      )
+                                    : null,
+                              ),
+                          ],
+                        ),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: size,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          shadows: shadow,
+                        ),
                       ),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: size,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        shadows: shadow,
+                    if (showTranslation && c.translation != null) ...[
+                      SizedBox(height: size * 0.15),
+                      Text(
+                        c.translation!,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: size * 0.85,
+                          color: const Color(0xFFFFE082),
+                          shadows: shadow,
+                        ),
                       ),
-                    ),
-                  if (showTranslation && c.translation != null) ...[
-                    SizedBox(height: size * 0.15),
-                    Text(
-                      c.translation!,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: size * 0.85,
-                        color: const Color(0xFFFFE082),
-                        shadows: shadow,
-                      ),
-                    ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),
         );
         if (words.isEmpty) return subtitle;
         // 학습 단어: 화면 위쪽에 자막처럼
-        final vocab = Align(
-          alignment: Alignment.topCenter,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              24,
-              (h * 0.05).clamp(16.0, 60.0),
-              24,
-              0,
-            ),
-            child: Container(
-              padding: EdgeInsets.symmetric(
-                horizontal: size * 0.5,
-                vertical: size * 0.25,
+        final vocab = IgnorePointer(
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                24,
+                (h * 0.05).clamp(16.0, 60.0),
+                24,
+                0,
               ),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.55),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final w in words)
-                    Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(
-                            text: w.lemma,
-                            style: const TextStyle(
-                              color: _vocabColor,
-                              fontWeight: FontWeight.w700,
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: size * 0.5,
+                  vertical: size * 0.25,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final w in words)
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: w.lemma,
+                              style: const TextStyle(
+                                color: _vocabColor,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
-                          TextSpan(
-                            text: '  ${w.pos}  ',
-                            style: const TextStyle(color: Colors.white60),
-                          ),
-                          TextSpan(text: w.meaning),
-                        ],
+                            TextSpan(
+                              text: '  ${w.pos}  ',
+                              style: const TextStyle(color: Colors.white60),
+                            ),
+                            TextSpan(text: w.meaning),
+                          ],
+                        ),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: size * 0.72,
+                          color: Colors.white,
+                          shadows: shadow,
+                        ),
                       ),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: size * 0.72,
-                        color: Colors.white,
-                        shadows: shadow,
-                      ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
         );
         return Stack(children: [vocab, subtitle]);
       },
+    );
+  }
+
+  /// 자막 상자만 클릭을 받는다. [onTapCue]가 없으면 클릭을 통과시킨다.
+  Widget _tappable(BilingualCue c, Widget box) {
+    final onTap = onTapCue;
+    if (onTap == null) return IgnorePointer(child: box);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(onTap: () => onTap(c), child: box),
     );
   }
 }
