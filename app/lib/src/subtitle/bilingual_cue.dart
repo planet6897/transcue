@@ -55,6 +55,7 @@ class BilingualCue {
     required this.original,
     this.translation,
     this.words,
+    this.provisional = false,
   });
 
   final Duration start;
@@ -65,15 +66,20 @@ class BilingualCue {
   /// 학습 단어. null = 아직 안 만듦, [] = 고를 단어 없음
   final List<VocabItem>? words;
 
+  /// AI로 다시 번역하는 중인 줄. 새 번역이 올 때까지 기존 번역을 보여 준다.
+  final bool provisional;
+
   bool contains(Duration t) => t >= start && t < end;
 
-  BilingualCue withTranslation(String? t) => BilingualCue(
-    start: start,
-    end: end,
-    original: original,
-    translation: t,
-    words: words,
-  );
+  BilingualCue withTranslation(String? t, {bool provisional = false}) =>
+      BilingualCue(
+        start: start,
+        end: end,
+        original: original,
+        translation: t,
+        words: words,
+        provisional: provisional,
+      );
 
   BilingualCue withWords(List<VocabItem>? w) => BilingualCue(
     start: start,
@@ -81,6 +87,7 @@ class BilingualCue {
     original: original,
     translation: translation,
     words: w,
+    provisional: provisional,
   );
 
   BilingualCue withTimes(Duration s, Duration e) => BilingualCue(
@@ -89,6 +96,7 @@ class BilingualCue {
     original: original,
     translation: translation,
     words: words,
+    provisional: provisional,
   );
 
   Map<String, Object?> toJson() => {
@@ -97,6 +105,7 @@ class BilingualCue {
     'o': original,
     if (translation != null) 't': translation,
     if (words != null) 'w': [for (final w in words!) w.toJson()],
+    if (provisional) 'p': 1,
   };
 
   factory BilingualCue.fromJson(Map<String, dynamic> j) => BilingualCue(
@@ -107,8 +116,14 @@ class BilingualCue {
     words: (j['w'] as List?)
         ?.map((e) => VocabItem.fromJson(e as List<dynamic>))
         .toList(),
+    provisional: j['p'] == 1,
   );
 }
+
+/// 인코딩이 잘못되어 깨진 한국어인지 (한글 없이 라틴 확장 문자·대체 문자만 있는 줄)
+bool isBrokenKorean(String text) =>
+    RegExp(r'[\u0080-\u00ff\ufffd]').hasMatch(text) &&
+    !RegExp(r'[\uac00-\ud7a3]').hasMatch(text);
 
 /// 재생 위치에 표시할 큐를 찾는다. (큐는 start 기준 정렬되어 있다고 가정)
 ///

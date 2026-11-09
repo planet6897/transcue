@@ -220,6 +220,12 @@ class SubtitleJob extends ChangeNotifier {
     return false;
   }
 
+  /// 예전에 저장된 깨진 번역은 지워서 다시 번역하게 한다
+  static BilingualCue _repairSaved(BilingualCue c) {
+    final t = c.translation;
+    return t != null && isBrokenKorean(t) ? c.withTranslation(null) : c;
+  }
+
   Future<bool> _readCache() async {
     if (_dbg('DUALCUE_NO_CACHE')) return false;
     final f = await _cacheFile();
@@ -243,7 +249,7 @@ class SubtitleJob extends ChangeNotifier {
       _complete = j['complete'] != false;
       final saved = [
         for (final c in (j['cues'] as List).cast<Map<String, dynamic>>())
-          BilingualCue.fromJson(c),
+          _repairSaved(BilingualCue.fromJson(c)),
       ];
       if (source case LocalFileSource(:final path) when _complete) {
         // 예전에 잘못 받은 인터넷 자막 등: 영상 길이와 안 맞으면 버리고 다시 만든다
@@ -288,7 +294,9 @@ class SubtitleJob extends ChangeNotifier {
         await _speechToText();
         // 인터넷에서 한국어 자막만 찾은 경우: 음성 인식 결과에 시간 기준으로 붙인다
         final ko = _onlineKorean;
-        if (ko != null) _setCues(mergeTranslation(cues, ko));
+        if (ko != null) {
+          _setCues(mergeTranslation(cues, ko));
+        }
       }
       _sttDone = true;
       await _saveCache();
@@ -314,7 +322,7 @@ class SubtitleJob extends ChangeNotifier {
 
   String _summary() {
     final n = cues.length;
-    final t = cues.where((c) => c.translation != null).length;
+    final t = _translatedCount;
     final trans = sourceLang == 'ko'
         ? ''
         : t == n
@@ -677,6 +685,13 @@ class SubtitleJob extends ChangeNotifier {
           );
           koCues = null;
         }
+        // 옛 인코딩(CP949) 자막은 글자가 깨지므로 쓰지 않고 AI 번역에 맡긴다
+        if (koCues != null &&
+            koCues.where((c) => isBrokenKorean(c.original)).length >
+                koCues.length * 0.1) {
+          debugPrint('OpenSubtitles korean rejected: broken encoding');
+          koCues = null;
+        }
       }
       if (origHit == null) {
         _onlineKorean = koCues;
@@ -699,7 +714,9 @@ class SubtitleJob extends ChangeNotifier {
       }
       _onlineOriginal = true;
       _onlineKorean = koCues;
-      if (koCues != null) c = mergeTranslation(c, koCues);
+      if (koCues != null) {
+        c = mergeTranslation(c, koCues);
+      }
       sourceLang = lang.split('-').first;
       _release = origHit.release;
       originalFrom = origHit.hashMatch
@@ -778,7 +795,7 @@ class SubtitleJob extends ChangeNotifier {
   final _chunkWatch = Stopwatch();
 
   String _sttStatus(double fraction) {
-    final t = cues.where((c) => c.translation != null).length;
+    final t = _translatedCount;
     final active = _activeChunk;
     final chunk = active == null
         ? ''
@@ -927,11 +944,18 @@ class SubtitleJob extends ChangeNotifier {
 
   String _key(BilingualCue c) => '${c.start.inMilliseconds}|${c.original}';
 
+  /// 번역이 필요한 줄: 번역이 없거나 사용자가 다시 번역을 요청한 줄
+  bool _wantsTranslation(BilingualCue c) =>
+      c.translation == null || (c.provisional && settings.hasClaudeKey);
+
+  int get _translatedCount =>
+      cues.where((c) => c.translation != null && !_wantsTranslation(c)).length;
+
   List<BilingualCue> _pendingByPriority() {
     final ph = playhead().inMilliseconds - 5000;
     final p = [
       for (final c in cues)
-        if (c.translation == null && !_attempted.contains(_key(c))) c,
+        if (_wantsTranslation(c) && !_attempted.contains(_key(c))) c,
     ];
     return [
       ...p.where((c) => c.end.inMilliseconds >= ph),
@@ -980,11 +1004,16 @@ class SubtitleJob extends ChangeNotifier {
       cues.isNotEmpty &&
       settings.hasClaudeKey;
 
-  /// 원문은 그대로 두고 번역을 지운 뒤 다시 번역한다.
+  /// 원문은 그대로 두고 AI로 다시 번역한다. 새 번역이 온 줄부터 바뀐다.
   Future<void> retranslate() async {
     if (!canRetranslate) return;
     _fromCache = false;
-    _setCues([for (final c in cues) c.withTranslation(null)]);
+    _setCues([
+      for (final c in cues)
+        c.translation == null
+            ? c
+            : c.withTranslation(c.translation, provisional: true),
+    ]);
     await translateRemaining();
   }
 
@@ -1014,7 +1043,7 @@ class SubtitleJob extends ChangeNotifier {
           items: {for (var i = 0; i < batch.length; i++) i: batch[i].original},
         );
         if (_sttDone) {
-          final done = cues.where((c) => c.translation != null).length;
+          final done = _translatedCount;
           _set(
             JobStage.translating,
             '번역 중 $done/${cues.length} · ${settings.claudeModel.label}',
