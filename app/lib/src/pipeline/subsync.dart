@@ -178,7 +178,7 @@ SyncResult findBestSync(
 Duration? estimateLocalOffset(
   List<BilingualCue> cues,
   List<(int, int)> speech, {
-  Duration maxOffset = const Duration(seconds: 4),
+  Duration maxOffset = const Duration(seconds: 8),
 }) {
   if (cues.length < 3) return null;
   final r = findBestSync(

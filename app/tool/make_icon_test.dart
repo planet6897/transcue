@@ -1,13 +1,13 @@
 // 앱 아이콘 원본(PNG) 생성: flutter test tool/make_icon_test.dart
-// 재생 버튼 + 이중 자막(원문 흰색, 번역 청록색) — 앱의 학습 단어 강조색과 같은 색.
+// 재생 버튼 + 이중 자막(원문 흰색, 번역 청록색) + AI 반짝임 — 앱의 학습 단어 강조색과 같은 색.
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-const _top = Color(0xFF1E3A8A);
-const _bottom = Color(0xFF0B1120);
+const _top = Color(0xFF6D3BE8);
+const _bottom = Color(0xFF12194F);
 const _cyan = Color(0xFF80DEEA);
 
 /// [rect] 안에 재생 버튼과 자막 두 줄을 그린다
@@ -34,6 +34,18 @@ void _content(Canvas c, Rect r) {
       ..strokeJoin = StrokeJoin.round
       ..strokeWidth = w * 0.05
       ..style = PaintingStyle.stroke,
+  );
+  // AI 반짝임: 재생 버튼 오른쪽 위의 네 갈래 별
+  final cx = x + w * 0.80, cy = y + w * 0.14, s = w * 0.13, k = s * 0.14;
+  c.drawPath(
+    Path()
+      ..moveTo(cx, cy - s)
+      ..quadraticBezierTo(cx + k, cy - k, cx + s, cy)
+      ..quadraticBezierTo(cx + k, cy + k, cx, cy + s)
+      ..quadraticBezierTo(cx - k, cy + k, cx - s, cy)
+      ..quadraticBezierTo(cx - k, cy - k, cx, cy - s)
+      ..close(),
+    Paint()..color = _cyan,
   );
   final h = w * 0.085;
   RRect bar(double l, double t, double rr) => RRect.fromRectAndRadius(
