@@ -27,10 +27,6 @@ import 'volume_gesture.dart';
 
 /// 자막 다시 만들기 메뉴
 enum _Regen {
-  translation(
-    '번역 다시 하기',
-    '지금 번역을 지우고 Claude로 다시 번역합니다. 원문 자막은 그대로 둡니다. API 비용이 다시 발생합니다.',
-  ),
   fetch(
     '자막 다시 가져오기',
     '저장된 자막과 번역을 무시하고 내장·인터넷·YouTube 자막을 다시 찾습니다. '
@@ -188,6 +184,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
     super.dispose();
   }
 
+  /// 화면 아래 가운데에 작게 뜨는 알림
+  SnackBar _snack(
+    String text, {
+    Duration duration = const Duration(milliseconds: 2500),
+    SnackBarAction? action,
+  }) => SnackBar(
+    content: Text(text, textAlign: TextAlign.center),
+    width: (MediaQuery.sizeOf(context).width - 32).clamp(0, 460).toDouble(),
+    // 버튼이 있는 알림은 기본으로 계속 떠 있어 자막을 가린다
+    persist: false,
+    duration: duration,
+    action: action,
+  );
+
   void _toast(String msg) {
     if (!mounted) return;
     if (_videoKey.currentState?.isFullscreen() ?? false) {
@@ -201,7 +211,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(msg)));
+      ..showSnackBar(_snack(msg));
   }
 
   void _startJob(JobSource source, {JobRefresh refresh = JobRefresh.none}) {
@@ -407,10 +417,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(
-            SnackBar(
-              content: Text('이전에 보던 ${formatPosition(at)}부터 재생합니다'),
-              // 버튼이 있는 알림은 기본으로 계속 떠 있어 자막(한국어 줄)을 가린다
-              persist: false,
+            _snack(
+              '이전에 보던 ${formatPosition(at)}부터 재생합니다',
               duration: const Duration(seconds: 5),
               action: SnackBarAction(
                 label: '처음부터',
@@ -524,6 +532,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _view.flashCopied();
   }
 
+  /// 자막이 이상할 때 한 번에 AI로 다시 번역한다
+  void _retranslate() {
+    _toast('AI로 다시 번역합니다');
+    unawaited(_job?.retranslate());
+  }
+
   /// 자막 다시 만들기: 비용이 드는 작업이라 먼저 확인한다
   Future<void> _confirmRegen(_Regen regen) async {
     final job = _job;
@@ -551,8 +565,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final job = _job;
     if (job == null) return;
     switch (regen) {
-      case _Regen.translation:
-        unawaited(job.retranslate());
       case _Regen.fetch:
         _startJob(job.source, refresh: JobRefresh.fetch);
       case _Regen.speech:
@@ -869,17 +881,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           onPressed: _toggleVocab,
         ),
+        IconButton(
+          tooltip: 'AI로 다시 번역',
+          icon: const Icon(Icons.auto_awesome),
+          onPressed: _job?.canRetranslate ?? false ? _retranslate : null,
+        ),
         PopupMenuButton<_Regen>(
           tooltip: '자막·번역 다시 만들기',
           icon: const Icon(Icons.restart_alt),
           enabled: _job != null,
           onSelected: _confirmRegen,
           itemBuilder: (_) => [
-            PopupMenuItem(
-              value: _Regen.translation,
-              enabled: _job?.canRetranslate ?? false,
-              child: Text(_Regen.translation.label),
-            ),
             PopupMenuItem(value: _Regen.fetch, child: Text(_Regen.fetch.label)),
             if (canTranscribe)
               PopupMenuItem(
