@@ -250,6 +250,13 @@ class SubtitleJob extends ChangeNotifier {
         );
         return false;
       }
+      // 음성 인식 자막을 실시간 보정이 잘못 옮겨 저장한 결과: 원래 시간을 되살릴 수 없어 다시 만든다
+      if (originalFrom == fromStt && (syncInfo?.startsWith('실시간') ?? false)) {
+        debugPrint(
+          'cache rejected: speech-recognized subtitles shifted by live sync',
+        );
+        return false;
+      }
       _complete = j['complete'] != false;
       final saved = [
         for (final c in (j['cues'] as List).cast<Map<String, dynamic>>())
@@ -588,6 +595,7 @@ class SubtitleJob extends ChangeNotifier {
   // ---- 실시간 싱크 ----
 
   static const _liveInterval = Duration(seconds: 10);
+
   /// 한 번에 비교하는 길이. 40초는 대사가 빽빽한 시트콤에서 측정이 들쭉날쭉해
   /// (+3초 밀린 2 Broke Girls: +3.5, -3.7, -7.5초…) 두 번 연속 일치가 거의 안 나왔다.
   /// 90초면 24번 중 22번이 +2.3~3.7초, 싱크가 맞는 영상에서는 12번 모두 판단 보류.
@@ -598,8 +606,14 @@ class SubtitleJob extends ChangeNotifier {
 
   /// 판본이 다른 자막은 광고 구간 등에서 어긋나는 양이 구간마다 달라
   /// 영상 전체에 한 번 적용하는 [_autoSync]만으로는 맞출 수 없다.
+  /// 음성 인식 자막은 같은 소리에서 시간을 얻었으므로 맞출 필요가 없다. 게다가
+  /// whisper 자막은 문장 사이 빈 시간까지 이어 붙여 길어서, 비교하면 거의 매번
+  /// 몇 초 밀린 것처럼 잘못 잰다 (2 Broke Girls 10분: −7.8초가 두 번 연속 → 잘못 적용).
   bool get _canLiveSync =>
-      canDetectSpeech && source is LocalFileSource && cues.isNotEmpty;
+      canDetectSpeech &&
+      source is LocalFileSource &&
+      originalFrom != fromStt &&
+      cues.isNotEmpty;
 
   /// 재생 중 앞으로 나올 구간의 음성과 자막을 계속 비교해 어긋나면 그 지점부터 옮긴다.
   Future<void> _liveSyncLoop() async {

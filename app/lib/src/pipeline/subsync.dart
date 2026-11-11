@@ -175,10 +175,11 @@ SyncResult findBestSync(
 
 /// 짧은 구간의 어긋남을 잰다. 믿을 만한 차이가 없으면 null.
 /// [cues]와 [speech]는 같은 구간을 기준으로 한 상대 시간이어야 한다.
+/// 범위 ±12초: 2 Broke Girls에서 9.5초 밀린 자막을 ±8초로는 51번 중 5번만 잡았다 (±12초는 49번).
 Duration? estimateLocalOffset(
   List<BilingualCue> cues,
   List<(int, int)> speech, {
-  Duration maxOffset = const Duration(seconds: 8),
+  Duration maxOffset = const Duration(seconds: 12),
 }) {
   if (cues.length < 3) return null;
   final r = findBestSync(
@@ -188,6 +189,8 @@ Duration? estimateLocalOffset(
     scales: const [1.0],
   );
   if (r.offset.inMilliseconds.abs() < 300) return null;
+  // 찾는 범위 끝에 걸린 값은 실제 어긋남이 아니라 범위 밖으로 밀어낸 결과일 때가 많다
+  if (r.offset.abs() > maxOffset - const Duration(seconds: 1)) return null;
   if (r.score - r.baseScore <= r.total * 0.08) return null;
   return r.offset;
 }

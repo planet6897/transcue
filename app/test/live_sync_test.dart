@@ -40,6 +40,22 @@ void main() {
     expect(estimateLocalOffset(shifted(2000).take(2).toList(), speech), isNull);
   });
 
+  test('찾는 범위 끝에 걸린 값은 믿지 않는다', () {
+    expect(
+      estimateLocalOffset(
+        shifted(2000),
+        speech,
+        maxOffset: const Duration(milliseconds: 2500),
+      ),
+      isNull,
+    );
+  });
+
+  test('10초 가까이 밀린 자막도 잰다', () {
+    final o = estimateLocalOffset(shifted(9500), speech)!;
+    expect((o.inMilliseconds + 9500).abs(), lessThan(150));
+  });
+
   test('말소리가 없으면 판단하지 않는다', () {
     expect(estimateLocalOffset(shifted(2000), const []), isNull);
   });
