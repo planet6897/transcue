@@ -4,12 +4,18 @@
 #include <string>
 #include <vector>
 
+#include "audio_norm.h"
 #include "whisper.h"
 
 namespace {
 std::mutex g_mu;
 whisper_context *g_ctx = nullptr;
 std::string g_model;
+
+// 말소리 구간 검출(싱크 확인)은 음성 인식과 따로 돌도록 잠금과 모델을 분리한다
+std::mutex g_vad_mu;
+whisper_vad_context *g_vad = nullptr;
+std::string g_vad_model;
 
 std::string str(JNIEnv *env, jstring s) {
   if (s == nullptr) return {};
@@ -41,6 +47,8 @@ Java_com_transcue_app_WhisperBridge_nativeTranscribe(
   const jsize n = env->GetArrayLength(jpcm);
   std::vector<float> pcm(n);
   env->GetFloatArrayRegion(jpcm, 0, n, pcm.data());
+  // 작게 말한 구간도 인식되도록 소리 크기를 고른다 (데스크톱 ffmpeg dynaudnorm과 같은 설정)
+  transcue::normalizeLoudness(pcm.data(), pcm.size());
 
   auto p = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
   p.n_threads = threads;
@@ -80,5 +88,42 @@ Java_com_transcue_app_WhisperBridge_nativeTranscribe(
   jbyteArray arr = env->NewByteArray(static_cast<jsize>(out.size()));
   env->SetByteArrayRegion(arr, 0, static_cast<jsize>(out.size()),
                           reinterpret_cast<const jbyte *>(out.data()));
+  return arr;
+}
+
+// 말소리 구간 (데스크톱 whisper-vad-speech-segments와 같은 기본 설정).
+// 반환: [시작ms, 끝ms, 시작ms, 끝ms, ...]. 실패 시 null.
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_com_transcue_app_WhisperBridge_nativeSpeechSegments(
+    JNIEnv *env, jobject, jstring jvad, jint threads, jfloatArray jpcm) {
+  std::lock_guard<std::mutex> lock(g_vad_mu);
+  const std::string vad = str(env, jvad);
+  if (g_vad == nullptr || g_vad_model != vad) {
+    if (g_vad != nullptr) whisper_vad_free(g_vad);
+    auto cp = whisper_vad_default_context_params();
+    cp.n_threads = threads;
+    g_vad = whisper_vad_init_from_file_with_params(vad.c_str(), cp);
+    g_vad_model = g_vad != nullptr ? vad : "";
+    if (g_vad == nullptr) return nullptr;
+  }
+
+  const jsize n = env->GetArrayLength(jpcm);
+  std::vector<float> pcm(n);
+  env->GetFloatArrayRegion(jpcm, 0, n, pcm.data());
+  transcue::normalizeLoudness(pcm.data(), pcm.size());
+
+  whisper_vad_segments *segs = whisper_vad_segments_from_samples(
+      g_vad, whisper_vad_default_params(), pcm.data(), n);
+  if (segs == nullptr) return nullptr;
+  const int ns = whisper_vad_segments_n_segments(segs);
+  std::vector<jlong> ms(ns * 2);
+  for (int i = 0; i < ns; i++) {
+    // 단위: 1/100초
+    ms[i * 2] = static_cast<jlong>(whisper_vad_segments_get_segment_t0(segs, i) * 10);
+    ms[i * 2 + 1] = static_cast<jlong>(whisper_vad_segments_get_segment_t1(segs, i) * 10);
+  }
+  whisper_vad_free_segments(segs);
+  jlongArray arr = env->NewLongArray(static_cast<jsize>(ms.size()));
+  env->SetLongArrayRegion(arr, 0, static_cast<jsize>(ms.size()), ms.data());
   return arr;
 }

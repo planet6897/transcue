@@ -6,3 +6,9 @@ Java_com_transcue_app_WhisperBridge_nativeTranscribe(
     JNIEnv *, jobject, jstring, jstring, jstring, jint, jfloatArray) {
   return nullptr;
 }
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_com_transcue_app_WhisperBridge_nativeSpeechSegments(
+    JNIEnv *, jobject, jstring, jint, jfloatArray) {
+  return nullptr;
+}

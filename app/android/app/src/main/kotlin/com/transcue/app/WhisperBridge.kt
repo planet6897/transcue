@@ -7,6 +7,7 @@ import android.media.MediaFormat
 import android.os.Handler
 import android.os.Looper
 import io.flutter.plugin.common.BinaryMessenger
+import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
@@ -15,11 +16,15 @@ import java.util.concurrent.Executors
 /// 영상의 한 구간 소리를 Android 디코더로 16kHz 모노로 바꾸고 whisper.cpp(JNI)로 받아 적는다.
 class WhisperBridge(messenger: BinaryMessenger) {
     private val worker = Executors.newSingleThreadExecutor()
+
+    /// 싱크 확인용 말소리 검출. 음성 인식(30초에 30~60초)이 끝나기를 기다리지 않게 따로 돈다.
+    private val vadWorker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
     init {
         System.loadLibrary("transcue_whisper")
         MethodChannel(messenger, "transcue/whisper").setMethodCallHandler { call, result ->
+            if (call.method == "speech") return@setMethodCallHandler speech(call, result)
             if (call.method != "transcribe") return@setMethodCallHandler result.notImplemented()
             val path = call.argument<String>("path")!!
             val startMs = (call.argument<Number>("startMs")!!).toLong()
@@ -54,6 +59,26 @@ class WhisperBridge(messenger: BinaryMessenger) {
             }
         }
     }
+
+    /// 영상 한 구간의 말소리 구간: [시작ms, 끝ms, ...] (구간 시작 기준). 소리가 없으면 null.
+    private fun speech(call: MethodCall, result: MethodChannel.Result) {
+        val path = call.argument<String>("path")!!
+        val startMs = (call.argument<Number>("startMs")!!).toLong()
+        val lengthMs = (call.argument<Number>("lengthMs")!!).toLong()
+        val vad = call.argument<String>("vad")!!
+        vadWorker.execute {
+            try {
+                val pcm = decodeAudio(path, startMs, lengthMs)
+                val segs = if (pcm.size < SAMPLE_RATE) null
+                else nativeSpeechSegments(vad, 2, pcm)
+                main.post { result.success(segs?.toList()) }
+            } catch (e: Throwable) {
+                main.post { result.error("vad", e.toString(), null) }
+            }
+        }
+    }
+
+    private external fun nativeSpeechSegments(vad: String, threads: Int, pcm: FloatArray): LongArray?
 
     private external fun nativeTranscribe(
         model: String, vad: String?, lang: String, threads: Int, pcm: FloatArray,

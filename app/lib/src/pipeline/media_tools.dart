@@ -132,6 +132,11 @@ Future<List<BilingualCue>> extractEmbeddedSubtitle(
   return parseWebVtt(vtt);
 }
 
+/// 작게 말한 구간을 키워 소리 크기를 고른다. 안 하면 whisper VAD가 작은 말소리를
+/// 말이 아닌 것으로 보고 건너뛴다 (2 Broke Girls 실측: -30dB 구간 단어 11/45 → 38/45,
+/// 보통 크기 구간과 음악 장면은 거의 그대로). Android는 whisper_jni.cpp에서 같은 처리.
+const loudnessFilter = 'dynaudnorm=f=500:g=31:p=0.9:m=50';
+
 /// 음성을 whisper 입력 형식(16kHz mono 16-bit WAV)으로 추출한다.
 /// [input]은 파일 경로 또는 URL(YouTube 스트림 등). [onProgress]는 0~1.
 Future<void> extractAudio(
@@ -163,6 +168,8 @@ Future<void> extractAudio(
     '-i',
     input,
     '-vn',
+    '-af',
+    loudnessFilter,
     '-ac',
     '1',
     '-ar',

@@ -588,7 +588,10 @@ class SubtitleJob extends ChangeNotifier {
   // ---- 실시간 싱크 ----
 
   static const _liveInterval = Duration(seconds: 10);
-  static const _liveWindow = Duration(seconds: 40);
+  /// 한 번에 비교하는 길이. 40초는 대사가 빽빽한 시트콤에서 측정이 들쭉날쭉해
+  /// (+3초 밀린 2 Broke Girls: +3.5, -3.7, -7.5초…) 두 번 연속 일치가 거의 안 나왔다.
+  /// 90초면 24번 중 22번이 +2.3~3.7초, 싱크가 맞는 영상에서는 12번 모두 판단 보류.
+  static const _liveWindow = Duration(seconds: 90);
 
   /// 영상 전체 싱크 작업. 끝나기 전에 옮기면 두 보정이 겹친다.
   Future<void>? _wholeFileSync;
@@ -596,7 +599,7 @@ class SubtitleJob extends ChangeNotifier {
   /// 판본이 다른 자막은 광고 구간 등에서 어긋나는 양이 구간마다 달라
   /// 영상 전체에 한 번 적용하는 [_autoSync]만으로는 맞출 수 없다.
   bool get _canLiveSync =>
-      hasDesktopTools && source is LocalFileSource && cues.isNotEmpty;
+      canDetectSpeech && source is LocalFileSource && cues.isNotEmpty;
 
   /// 재생 중 앞으로 나올 구간의 음성과 자막을 계속 비교해 어긋나면 그 지점부터 옮긴다.
   Future<void> _liveSyncLoop() async {
@@ -606,7 +609,6 @@ class SubtitleJob extends ChangeNotifier {
     final tmp = await Directory.systemTemp.createTemp('transcue_live_');
     try {
       final vad = await ensureVadModel();
-      final wav = '${tmp.path}/live.wav';
       final tracker = LiveSyncTracker();
       var last = playhead() - _liveInterval; // 첫 측정은 기다리지 않는다
       for (var first = true; !_disposed; first = false) {
@@ -626,8 +628,13 @@ class SubtitleJob extends ChangeNotifier {
             if (c.start >= now && c.start < end) c,
         ];
         try {
-          await extractAudio(path, wav, start: now, length: _liveWindow);
-          final speech = await detectSpeech(wav, vad);
+          final speech = await speechInRange(
+            input: path,
+            start: now,
+            length: _liveWindow,
+            vadModel: vad,
+            tmp: tmp,
+          );
           final measured = estimateLocalOffset(shiftCues(near, -now), speech);
           debugPrint('[live-sync] at ${now.inSeconds}s measured $measured');
           final offset = tracker.add(measured);
