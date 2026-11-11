@@ -1149,7 +1149,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             MaterialVideoControls(state)
                           else
                             MaterialDesktopVideoControls(state),
-                          // 위로 밀면 소리 크게, 아래로 밀면 작게 (조작부 위에 겹침)
+                          // 위/아래로 밀기: 오른쪽은 소리, 왼쪽은 밝기 (조작부 위에 겹침)
                           if (Platform.isAndroid) const VolumeDragLayer(),
                           // 상단 메뉴와 하단 조작부를 뺀 영상 영역의 클릭.
                           // 통과형이라 마우스를 올렸을 때 조작부도 그대로 나타난다
