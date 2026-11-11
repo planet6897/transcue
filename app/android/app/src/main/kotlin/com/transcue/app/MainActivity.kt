@@ -44,6 +44,35 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // 화면 왼쪽을 위/아래로 밀어 밝기 조절: 이 앱 창의 밝기만 바꾼다 (0~1, 권한 불필요).
+        // reset 하면 기기 설정 밝기로 돌아간다
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "transcue/brightness")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "get" -> {
+                        val own = window.attributes.screenBrightness
+                        result.success(
+                            if (own >= 0f) own.toDouble()
+                            else Settings.System.getInt(
+                                contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128,
+                            ).coerceIn(0, 255) / 255.0,
+                        )
+                    }
+                    "set" -> {
+                        val v = (call.arguments as Number).toFloat().coerceIn(0.01f, 1f)
+                        window.attributes = window.attributes.apply { screenBrightness = v }
+                        result.success(v.toDouble())
+                    }
+                    "reset" -> {
+                        window.attributes = window.attributes.apply {
+                            screenBrightness =
+                                android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                        }
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "transcue/permission")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
