@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../subtitle/bilingual_cue.dart';
 import 'media_tools.dart';
+import 'subsync.dart';
 import 'tools.dart';
 import 'whisper.dart';
 
@@ -51,6 +52,37 @@ Stream<SttEvent> transcribeRange({
     fallbackLanguage: fallbackLanguage,
   );
 }
+
+/// 이 기기에서 말소리 구간을 찾을 수 있는지 (재생 중 싱크 확인)
+final bool canDetectSpeech = hasDesktopTools || Platform.isAndroid;
+
+/// 영상 [input]의 [start]부터 [length] 사이 말소리 구간 (밀리초, [start] 기준).
+/// 소리가 없으면(영상 끝) 빈 목록.
+Future<List<(int, int)>> speechInRange({
+  required String input,
+  required Duration start,
+  required Duration length,
+  required File vadModel,
+  required Directory tmp,
+}) async {
+  if (Platform.isAndroid) {
+    final r = await _channel.invokeListMethod<int>('speech', {
+      'path': input,
+      'startMs': start.inMilliseconds,
+      'lengthMs': length.inMilliseconds,
+      'vad': vadModel.path,
+    });
+    return pairSegments(r ?? const []);
+  }
+  final wav = '${tmp.path}/speech.wav';
+  await extractAudio(input, wav, start: start, length: length);
+  return detectSpeech(wav, vadModel);
+}
+
+/// 네이티브 결과 [시작, 끝, 시작, 끝, ...] → 구간 목록
+List<(int, int)> pairSegments(List<int> ms) => [
+  for (var i = 0; i + 1 < ms.length; i += 2) (ms[i], ms[i + 1]),
+];
 
 Stream<SttEvent> _transcribeAndroid(
   String path,

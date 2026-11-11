@@ -12,4 +12,12 @@ void main() {
     expect(cues.map((c) => c.original), ['Michael, wake up.', "It's KITT."]);
     expect(cues.first.end, const Duration(milliseconds: 2500));
   });
+
+  test('네이티브 말소리 구간 해석: [시작, 끝, ...] → 구간 목록', () {
+    expect(pairSegments([1000, 3000, 4200, 7000]), [
+      (1000, 3000),
+      (4200, 7000),
+    ]);
+    expect(pairSegments([]), isEmpty);
+  });
 }
