@@ -871,7 +871,8 @@ class SubtitleJob extends ChangeNotifier {
     _parakeetStarted = true;
     () async {
       try {
-        await parakeetCli(); // 없으면 예외
+        // 데스크톱은 parakeet-cli가 있어야 한다 (Android는 앱에 함께 빌드되어 있다)
+        if (hasDesktopTools) await parakeetCli(); // 없으면 예외
         final f = await ensureModelFile(
           ParakeetModel.file,
           ParakeetModel.url,
@@ -925,7 +926,7 @@ class SubtitleJob extends ChangeNotifier {
     final vad = await ensureVadModel();
     // 영어로 확인된 구간은 Parakeet으로 (모델은 처음 필요할 때 뒤에서 받는다)
     final wantParakeet =
-        settings.englishStt == EnglishStt.parakeet && hasDesktopTools;
+        settings.englishStt == EnglishStt.parakeet && canUseParakeet;
     var parakeetRuns = 0;
 
     final (input, headers, duration) = switch (source) {

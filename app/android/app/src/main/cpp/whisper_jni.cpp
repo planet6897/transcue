@@ -1,16 +1,23 @@
 // whisper.cpp JNI: 16kHz 모노 PCM → 자막 줄 (데스크톱 whisper-cli와 같은 설정)
 #include <jni.h>
+#include <cstdio>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #include "audio_norm.h"
+#include "parakeet.h"
 #include "whisper.h"
 
 namespace {
 std::mutex g_mu;
 whisper_context *g_ctx = nullptr;
 std::string g_model;
+
+// Parakeet (영어). 모델이 커서(670MB) 한 번 불러 두고 쓴다
+std::mutex g_pk_mu;
+parakeet_context *g_pk = nullptr;
+std::string g_pk_model;
 
 // 말소리 구간 검출(싱크 확인)은 음성 인식과 따로 돌도록 잠금과 모델을 분리한다
 std::mutex g_vad_mu;
@@ -125,5 +132,58 @@ Java_com_transcue_app_WhisperBridge_nativeSpeechSegments(
   whisper_vad_free_segments(segs);
   jlongArray arr = env->NewLongArray(static_cast<jsize>(ms.size()));
   env->SetLongArrayRegion(arr, 0, static_cast<jsize>(ms.size()), ms.data());
+  return arr;
+}
+
+// Parakeet TDT (영어 등 유럽어). 데스크톱 parakeet-cli -ps와 같은 토큰 줄을 돌려준다:
+//   "[j] t0=시작 t1=끝 word_start=true|false "토큰"" (시간 단위 10ms)
+// 문장으로 묶는 일은 앱(parseParakeetTokens)이 데스크톱과 똑같이 한다. 실패 시 null.
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_transcue_app_WhisperBridge_nativeParakeet(
+    JNIEnv *env, jobject, jstring jmodel, jint threads, jfloatArray jpcm) {
+  std::lock_guard<std::mutex> lock(g_pk_mu);
+  const std::string model = str(env, jmodel);
+  if (g_pk == nullptr || g_pk_model != model) {
+    if (g_pk != nullptr) parakeet_free(g_pk);
+    auto cp = parakeet_context_default_params();
+    cp.use_gpu = false;
+    g_pk = parakeet_init_from_file_with_params(model.c_str(), cp);
+    g_pk_model = g_pk != nullptr ? model : "";
+    if (g_pk == nullptr) return nullptr;
+  }
+
+  const jsize n = env->GetArrayLength(jpcm);
+  std::vector<float> pcm(n);
+  env->GetFloatArrayRegion(jpcm, 0, n, pcm.data());
+  // 데스크톱은 ffmpeg dynaudnorm을 거친 소리를 넘기므로 같은 처리를 한다
+  transcue::normalizeLoudness(pcm.data(), pcm.size());
+
+  auto p = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
+  p.n_threads = threads;
+  if (parakeet_full(g_pk, p, pcm.data(), n) != 0) return nullptr;
+
+  std::string out;
+  char head[96];
+  const int ns = parakeet_full_n_segments(g_pk);
+  for (int i = 0; i < ns; i++) {
+    const int nt = parakeet_full_n_tokens(g_pk, i);
+    for (int j = 0; j < nt; j++) {
+      const parakeet_token_data d = parakeet_full_get_token_data(g_pk, i, j);
+      const char *tok = parakeet_token_to_str(g_pk, d.id);
+      std::snprintf(head, sizeof(head), "[%d] t0=%lld t1=%lld word_start=%s \"",
+                    j, (long long)d.t0, (long long)d.t1,
+                    d.is_word_start ? "true" : "false");
+      out += head;
+      std::string t = tok != nullptr ? tok : "";
+      for (auto &c : t) {
+        if (c == '\n' || c == '\r') c = ' ';
+      }
+      out += t;
+      out += "\"\n";
+    }
+  }
+  jbyteArray arr = env->NewByteArray(static_cast<jsize>(out.size()));
+  env->SetByteArrayRegion(arr, 0, static_cast<jsize>(out.size()),
+                          reinterpret_cast<const jbyte *>(out.data()));
   return arr;
 }

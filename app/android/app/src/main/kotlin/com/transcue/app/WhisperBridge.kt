@@ -25,6 +25,7 @@ class WhisperBridge(messenger: BinaryMessenger) {
         System.loadLibrary("transcue_whisper")
         MethodChannel(messenger, "transcue/whisper").setMethodCallHandler { call, result ->
             if (call.method == "speech") return@setMethodCallHandler speech(call, result)
+            if (call.method == "parakeet") return@setMethodCallHandler parakeet(call, result)
             if (call.method != "transcribe") return@setMethodCallHandler result.notImplemented()
             val path = call.argument<String>("path")!!
             val startMs = (call.argument<Number>("startMs")!!).toLong()
@@ -77,6 +78,45 @@ class WhisperBridge(messenger: BinaryMessenger) {
             }
         }
     }
+
+    /// Parakeet(영어)으로 받아 적기. 결과는 데스크톱 parakeet-cli와 같은 토큰 줄 (앱이 문장으로 묶음).
+    /// 소리가 거의 없으면 text = null, 인식에 실패하면 오류 (앱이 whisper로 넘어간다).
+    private fun parakeet(call: MethodCall, result: MethodChannel.Result) {
+        val path = call.argument<String>("path")!!
+        val startMs = (call.argument<Number>("startMs")!!).toLong()
+        val lengthMs = (call.argument<Number>("lengthMs")!!).toLong()
+        val model = call.argument<String>("model")!!
+        val threads = call.argument<Int>("threads") ?: bigCores
+        // whisper와 같은 일꾼: 둘이 동시에 돌면 느린 기기에서 서로 기다리기만 한다
+        worker.execute {
+            try {
+                val t0 = System.currentTimeMillis()
+                val pcm = decodeAudio(path, startMs, lengthMs)
+                val t1 = System.currentTimeMillis()
+                if (pcm.size < SAMPLE_RATE) {
+                    main.post { result.success(mapOf("text" to null)) }
+                    return@execute
+                }
+                val bytes = nativeParakeet(model, threads, pcm)
+                    ?: throw IllegalStateException("Parakeet 인식 실패 (모델을 불러오지 못했거나 이 기기에서 지원하지 않음)")
+                val t2 = System.currentTimeMillis()
+                main.post {
+                    result.success(
+                        mapOf(
+                            "audioMs" to pcm.size * 1000L / SAMPLE_RATE,
+                            "text" to bytes.toString(Charsets.UTF_8),
+                            "decodeMs" to (t1 - t0),
+                            "parakeetMs" to (t2 - t1),
+                        ),
+                    )
+                }
+            } catch (e: Throwable) {
+                main.post { result.error("parakeet", e.toString(), null) }
+            }
+        }
+    }
+
+    private external fun nativeParakeet(model: String, threads: Int, pcm: FloatArray): ByteArray?
 
     private external fun nativeSpeechSegments(vad: String, threads: Int, pcm: FloatArray): LongArray?
 
