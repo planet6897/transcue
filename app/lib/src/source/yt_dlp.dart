@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../pipeline/tools.dart';
+import 'youtube_backend.dart';
 import 'youtube_url.dart';
 
 /// yt-dlp가 알려준 자막 트랙 하나.
@@ -206,7 +207,7 @@ class YtDlpException implements Exception {
 ///
 /// 배포판(M5)에서는 앱 지원 폴더에 yt-dlp 단독 실행 파일을 내려받아 쓰고
 /// `-U`로 자동 업데이트한다. 개발 중에는 설치된 yt-dlp를 찾는다.
-class YtDlp {
+class YtDlp implements YoutubeBackend {
   YtDlp({this.executable});
 
   /// 명시 경로. null이면 [locate]로 찾는다.
@@ -238,6 +239,7 @@ class YtDlp {
     return r.stdout as String;
   }
 
+  @override
   Future<YoutubeMedia> resolve(String url) async {
     final out = await _run(['-J', url]);
     return YoutubeMedia.fromInfoJson(jsonDecode(out) as Map<String, dynamic>);
@@ -246,6 +248,7 @@ class YtDlp {
   /// 채널·재생목록의 영상 목록(`--flat-playlist`). [start]부터 [end]까지 (1부터, 끝 포함).
   /// 영상마다 페이지를 열지 않아 30개에 몇 초면 된다.
   /// 업로드 날짜는 목록의 "3주 전" 같은 표시로 어림한 값(`timestamp`, 하루 단위)이다.
+  @override
   Future<Map<String, dynamic>> listPlaylist(
     String url, {
     required int start,
@@ -271,6 +274,7 @@ class YtDlp {
   /// VTT가 아니라 HLS 재생목록(m3u8)으로 내려온다. yt-dlp가 이를 처리해 준다.
   ///
   /// YouTube는 자막 요청이 몰리면 429를 돌려주므로 몇 초 쉬고 재시도한다.
+  @override
   Future<String> fetchCaption(
     YoutubeMedia media,
     CaptionTrack track, {

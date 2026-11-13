@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../online/opensubtitles.dart';
 import '../player/resume.dart' show formatPosition;
 import '../settings/app_settings.dart';
+import '../source/youtube_backend.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
 import '../subtitle/webvtt.dart';
@@ -32,7 +33,9 @@ class LocalFileSource extends JobSource {
 class YoutubeSource extends JobSource {
   const YoutubeSource(this.media, this.ytDlp);
   final YoutubeMedia media;
-  final YtDlp ytDlp;
+
+  /// 데스크톱 yt-dlp 또는 Android 순수 Dart
+  final YoutubeBackend ytDlp;
 }
 
 enum JobStage {
@@ -422,7 +425,7 @@ class SubtitleJob extends ChangeNotifier {
               parseWebVtt(await ytDlp.fetchCaption(media, ko)),
             );
             _setCues(c);
-          } on YtDlpException catch (e) {
+          } on Exception catch (e) {
             debugPrint('YouTube Korean captions failed: $e');
           }
         }

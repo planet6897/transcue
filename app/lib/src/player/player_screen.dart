@@ -14,7 +14,9 @@ import '../pipeline/stt_engine.dart' show canTranscribe;
 import '../pipeline/subtitle_job.dart';
 import '../settings/app_settings.dart';
 import '../settings/settings_dialog.dart';
+import '../source/dart_youtube.dart';
 import '../source/ted_catalog.dart';
+import '../source/youtube_backend.dart';
 import '../source/youtube_url.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
@@ -65,7 +67,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     ),
   );
   late final VideoController _controller = VideoController(_player);
-  late final YtDlp _ytDlp = widget._ytDlp ?? YtDlp();
+
+  /// YouTube: 데스크톱은 yt-dlp, Android는 순수 Dart (yt-dlp를 실행할 수 없다)
+  late final YoutubeBackend _ytDlp =
+      widget._ytDlp ?? (Platform.isAndroid ? DartYoutube() : YtDlp());
   final _view = DualSubtitleState();
   final _videoKey = GlobalKey<VideoState>();
 
@@ -1210,8 +1215,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
             icon: const Icon(Icons.smart_display),
             onPressed: _loading ? null : _openYoutube,
           ),
-        // TED 목록도 yt-dlp로 받는다 (데스크톱만)
-        if (hasDesktopTools)
+        // 데스크톱은 yt-dlp, Android는 순수 Dart로 받는다
+        if (canUseYoutube)
           IconButton(
             tooltip: '영어 강연·학습 채널 (TED·BBC·VOA)',
             icon: const Icon(Icons.record_voice_over),
