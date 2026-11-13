@@ -29,8 +29,11 @@ jobs:
       - run: flutter test
       # media_kit이 빌드 중 mpv를 외부 서버에서 내려받는데 가끔 실패한다
       # (macOS: 'framework Mpv not found', Windows: 'Integrity check failed') → 한 번 다시 시도
+      # macOS는 release로 빌드해 Intel·Apple Silicon universal인지 확인한다 (debug는 지금 CPU용만)
       - if: runner.os == 'macOS'
-        run: flutter build macos --debug || flutter build macos --debug
+        run: flutter build macos --release || flutter build macos --release
+      - if: runner.os == 'macOS'
+        run: bash ../scripts/check-macos-universal.sh build/macos/Build/Products/Release/Transcue.app
       - if: runner.os == 'Windows'
         shell: bash
         run: flutter build windows --debug || (rm -f build/windows/x64/mpv-dev-*.7z && flutter build windows --debug)

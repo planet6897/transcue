@@ -80,4 +80,5 @@ try {
     Run git @('push', 'origin', $tag)
     Run gh @('release', 'create', $tag, $zip, $apk, '--title', "Transcue $ver", '--notes-file', $notesPath)
     Write-Host "== 배포 완료: $tag"
+    Write-Host '   macOS universal 앱은 GitHub Actions "Release (macOS)"가 빌드해 이 Release에 붙입니다 (10분 안팎)'
 } finally { Pop-Location }

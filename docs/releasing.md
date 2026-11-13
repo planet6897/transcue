@@ -27,8 +27,26 @@ Windows 실행 파일 버전은 이 값을 그대로 쓰고, 앱 설정 화면 �
    테스트 → Windows·Android 릴리즈 빌드 → `dist/X.Y.Z/`에 `transcue-X.Y.Z-windows-x64.zip`,
    `transcue-X.Y.Z-android.apk` → 태그 → GitHub Release (설명은 CHANGELOG의 그 버전 항목).
    main이 origin과 다르거나, 같은 태그가 있거나, 커밋하지 않은 변경이 있으면 멈춘다.
+4. macOS는 Release가 만들어지면 GitHub Actions(`.github/workflows/release-macos.yml`)가
+   macOS 서버에서 빌드해 `transcue-X.Y.Z-macos-universal.zip`을 같은 Release에 붙인다 (Mac 불필요, 10분 안팎).
+   실패했으면 Actions 탭에서 "Release (macOS)"를 태그를 넣어 다시 돌린다.
+
+## 플랫폼별 산출물
+
+| 플랫폼 | 파일 | 만드는 곳 |
+|---|---|---|
+| Windows 11 (x64) | `transcue-X.Y.Z-windows-x64.zip` | `release.ps1` (Windows PC) |
+| macOS (Intel·Apple Silicon) | `transcue-X.Y.Z-macos-universal.zip` | GitHub Actions macOS 서버 |
+| Android (64비트 ARM 권장) | `transcue-X.Y.Z-android.apk` | `release.ps1` (Windows PC) |
+
+macOS 앱은 하나로 Intel(x86_64)과 Apple Silicon(arm64)에서 모두 돈다 (universal).
+CI가 PR마다 macOS를 release로 빌드해 앱 안의 모든 실행 파일·라이브러리에 두 CPU가 다 있는지
+`scripts/check-macos-universal.sh`로 확인한다.
 
 ## 참고
 
 - Android APK는 아직 debug 키로 서명한다 (`app/android/app/build.gradle.kts`). 정식 배포 전에 배포용 키를 만들어야 한다.
 - Windows는 설치본 없이 zip으로 배포한다 (Release 폴더 전체를 풀어 `transcue.exe` 실행).
+- macOS 앱은 아직 Apple 개발자 서명·공증을 하지 않았다. 처음 열 때 "확인되지 않은 개발자" 경고가 나오면
+  Finder에서 Control-클릭 → 열기. 정식 배포 전에 서명·공증이 필요하다.
+- 외부 도구(ffmpeg, whisper-cli, yt-dlp)는 각 PC에 설치한다. macOS는 Homebrew가 그 Mac의 CPU에 맞는 것을 설치한다.

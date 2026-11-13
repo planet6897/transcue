@@ -1,0 +1,37 @@
+# macOS 앱을 Intel(x86_64)·Apple Silicon(arm64) 모두에서 도는 universal로 빌드해
+# GitHub Release에 붙인다. scripts/release.ps1이 Release를 만들면 자동으로 돈다
+# (Windows zip·Android APK는 release.ps1이, macOS zip은 이 워크플로가 올린다).
+name: Release (macOS)
+on:
+  release: { types: [published] }
+  workflow_dispatch:
+    inputs:
+      tag: { description: '올릴 Release 태그 (예: v0.9.0)', required: true }
+
+permissions: { contents: write }
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    defaults: { run: { working-directory: app } }
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      APP: build/macos/Build/Products/Release/Transcue.app
+    steps:
+      - uses: actions/checkout@v5
+        with: { ref: "${{ github.event.release.tag_name || inputs.tag }}" }
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable, flutter-version: 3.41.6, cache: true }
+      - run: flutter pub get
+      # media_kit이 빌드 중 mpv를 외부 서버에서 내려받는데 가끔 실패한다 → 한 번 다시 시도
+      - name: 빌드 (universal)
+        run: flutter build macos --release || flutter build macos --release
+      - name: Intel·Apple Silicon 둘 다 들어 있는지 (앱과 함께 넣은 라이브러리 포함)
+        run: bash ../scripts/check-macos-universal.sh "$APP"
+      - name: 묶어서 Release에 올리기
+        run: |
+          zip="transcue-${TAG#v}-macos-universal.zip"
+          ditto -c -k --keepParent "$APP" "$zip"
+          ls -lh "$zip"
+          gh release upload "$TAG" "$zip" --clobber
