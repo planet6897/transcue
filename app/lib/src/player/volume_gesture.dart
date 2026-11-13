@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -27,7 +28,20 @@ int wheelStep(Offset scrollDelta) => scrollDelta.dy < 0
     ? -1
     : 0;
 
+/// Android 기기 음량을 휠 한 칸에 바꾸는 양 (0~1). 기기 음량은 단계값(보통 0~15)이라
+/// 한 단계 이상 움직이도록 1/15로 한다.
+const deviceVolumeWheelStep = 1 / 15;
+
+/// Android에서 휠 한 칸을 굴렸을 때의 목표값 (0~1, 기기 음량 또는 이 앱 화면 밝기)
+double deviceWheelTarget(
+  double current,
+  int step, {
+  required bool brightness,
+}) => (current + step * (brightness ? brightnessStep : deviceVolumeWheelStep))
+    .clamp(0.0, 1.0);
+
 /// 화면을 위/아래로 밀어 조절 (터치 기기): 오른쪽 절반은 소리, 왼쪽 절반은 밝기.
+/// 마우스를 연결했으면 휠로도 같은 배치로 조절한다.
 /// 소리는 기기 미디어 음량 (볼륨 버튼과 같은 값), 밝기는 이 앱 화면만 바꾸고
 /// 재생 화면을 나가면 기기 설정 밝기로 돌아간다.
 /// 탭·두 번 탭·가로 밀기는 아래 조작부로 그대로 간다.
@@ -84,6 +98,45 @@ class _VolumeDragLayerState extends State<VolumeDragLayer> {
     }
   }
 
+  /// 마우스 휠: 오른쪽 절반은 소리, 왼쪽 절반은 밝기 (데스크톱과 같은 배치)
+  void _onWheel(PointerSignalEvent e, double width) {
+    if (e is! PointerScrollEvent) return;
+    final step = wheelStep(e.scrollDelta);
+    if (step == 0) return;
+    final brightness = e.localPosition.dx < width / 2;
+    GestureBinding.instance.pointerSignalResolver.register(e, (_) {
+      // 기기 값을 읽고 쓰는 동안 다음 칸이 오면 순서가 섞이므로 차례로 처리한다
+      _wheeling = _wheeling
+          .then((_) => _wheelOnce(brightness, step))
+          .catchError((Object _) {});
+    });
+  }
+
+  Future<void> _wheeling = Future.value();
+
+  Future<void> _wheelOnce(bool brightness, int step) async {
+    if (!mounted) return;
+    _hide?.cancel();
+    final ch = brightness ? _brightnessCh : _volumeCh;
+    // 같은 쪽을 표시 중이면 그 값에서 이어서, 아니면 기기 값을 읽는다
+    final base = _value != null && _brightness == brightness
+        ? _target
+        : await ch.invokeMethod<double>('get') ?? 0.5;
+    final want = deviceWheelTarget(base, step, brightness: brightness);
+    // 기기 음량은 단계값으로 맞춰지므로 실제로 바뀐 값을 다음 기준으로 쓴다
+    final got = await ch.invokeMethod<double>('set', want) ?? want;
+    if (!mounted) return;
+    if (brightness) _brightnessChanged = true;
+    setState(() {
+      _ch = ch;
+      _brightness = brightness;
+      _value = _target = brightness ? want : got;
+    });
+    _hide = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _value = null);
+    });
+  }
+
   void _end(DragEndDetails _) {
     if (_value == null) return;
     unawaited(_ch.invokeMethod<double>('set', _target));
@@ -102,20 +155,24 @@ class _VolumeDragLayerState extends State<VolumeDragLayer> {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
-      builder: (context, box) => GestureDetector(
+      builder: (context, box) => Listener(
         behavior: HitTestBehavior.translucent,
-        onVerticalDragStart: (d) => _start(d, box.maxWidth),
-        onVerticalDragUpdate: (d) => _update(d, box.maxHeight),
-        onVerticalDragEnd: _end,
-        child: SizedBox.expand(
-          child: _value == null
-              ? null
-              : Center(
-                  child: VolumeIndicator(
-                    value: _value!,
-                    brightness: _brightness,
+        onPointerSignal: (e) => _onWheel(e, box.maxWidth),
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onVerticalDragStart: (d) => _start(d, box.maxWidth),
+          onVerticalDragUpdate: (d) => _update(d, box.maxHeight),
+          onVerticalDragEnd: _end,
+          child: SizedBox.expand(
+            child: _value == null
+                ? null
+                : Center(
+                    child: VolumeIndicator(
+                      value: _value!,
+                      brightness: _brightness,
+                    ),
                   ),
-                ),
+          ),
         ),
       ),
     );
