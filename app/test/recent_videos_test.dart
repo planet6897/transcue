@@ -5,6 +5,26 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:transcue/src/player/recent_videos.dart';
 
 void main() {
+  group('recentIcon', () {
+    IconData icon(String source, String title) =>
+        recentIcon(RecentVideo(source: source, title: title));
+    const yt = 'https://www.youtube.com/watch?v=f5RqYHd2cBQ';
+
+    test('TED 강연 (최근 재생목록에 저장되는 YouTube 제목 그대로)', () {
+      expect(
+        icon(yt, 'How Would You Design Your Dream City? | James Rojas | TED'),
+        Icons.record_voice_over,
+      );
+      expect(icon(yt, 'Idea | Kim | TEDxSeoul'), Icons.record_voice_over);
+      expect(icon(yt, 'Climate | TED Countdown'), Icons.record_voice_over);
+    });
+    test('다른 YouTube 영상, 내 파일', () {
+      expect(icon(yt, 'Some vlog'), Icons.smart_display);
+      expect(icon(yt, 'TED fan reacts'), Icons.smart_display);
+      expect(icon(r'D:\Movies\a.mkv', 'a | TED'), Icons.movie_outlined);
+    });
+  });
+
   late Directory dir;
   late File file;
   setUp(() {

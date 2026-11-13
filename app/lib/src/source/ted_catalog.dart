@@ -3,11 +3,55 @@ import 'dart:io';
 
 import 'yt_dlp.dart';
 
-/// TED 공식 YouTube 채널의 최신 업로드 (최신순).
+/// TED 공식 YouTube 채널.
 ///
 /// TED.com은 자동 접근을 막고 있어(403 "automated access to TED.com is not permitted")
 /// YouTube 채널을 쓴다. TED 번역 봉사자 자막도 YouTube에 함께 올라간다.
-const tedChannelVideosUrl = 'https://www.youtube.com/@TED/videos';
+const tedChannelUrl = 'https://www.youtube.com/@TED';
+
+enum TedFeedKind { latest, playlist, search }
+
+/// 영상 목록을 어디서 가져올지: 최신 업로드 / TED 재생목록(분류) / 채널 검색
+class TedFeed {
+  const TedFeed._(this.kind, this.key, this.title);
+
+  static const latest = TedFeed._(TedFeedKind.latest, '', '최신 강연');
+
+  /// TED 채널의 재생목록 하나 ("Best TED Talks on psychology" 등)
+  const TedFeed.playlist(String id, String title)
+    : this._(TedFeedKind.playlist, id, title);
+
+  /// TED 채널 안에서 검색 (관련도순)
+  TedFeed.search(String query)
+    : this._(TedFeedKind.search, query.trim(), '“${query.trim()}” 검색 결과');
+
+  final TedFeedKind kind;
+
+  /// 재생목록 ID 또는 검색어
+  final String key;
+  final String title;
+
+  String get url => switch (kind) {
+    TedFeedKind.latest => '$tedChannelUrl/videos',
+    TedFeedKind.playlist => 'https://www.youtube.com/playlist?list=$key',
+    TedFeedKind.search =>
+      '$tedChannelUrl/search?query=${Uri.encodeQueryComponent(key)}',
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      other is TedFeed && other.kind == kind && other.key == key;
+
+  @override
+  int get hashCode => Object.hash(kind, key);
+
+  /// `yt-dlp --flat-playlist`로 받은 채널 재생목록 항목. 재생목록이 아니면 null.
+  static TedFeed? playlistFromEntry(Map<String, dynamic> e) {
+    final id = e['id'], title = e['title'];
+    if (id is! String || title is! String || !id.startsWith('PL')) return null;
+    return TedFeed.playlist(id, title.trim());
+  }
+}
 
 /// TED 영상 하나
 class TedVideo {
@@ -69,17 +113,21 @@ class TedVideo {
   }
 }
 
-/// "제목 | 강연자 | TED" → (제목, 강연자). 형식이 다르면 제목 그대로.
+/// YouTube 제목에서 강연자를 뗀다. 형식이 다르면 제목 그대로.
+/// - "제목 | 강연자 | TED" (요즘 형식, TEDx·TED Countdown 등 포함)
+/// - "제목 | 강연자" (예전 형식)
+/// - "제목 | TED…" (강연자 없음)
 (String, String?) splitTedTitle(String raw) {
   final parts = raw.split(' | ').map((s) => s.trim()).toList();
-  if (parts.length >= 3 && parts.last.startsWith('TED')) {
+  bool isTed(String s) => s.startsWith('TED');
+  if (parts.length >= 3 && isTed(parts.last)) {
     return (
       parts.sublist(0, parts.length - 2).join(' | '),
       parts[parts.length - 2],
     );
   }
-  if (parts.length == 2 && parts.last.startsWith('TED')) {
-    return (parts.first, null);
+  if (parts.length == 2 && parts.every((p) => p.isNotEmpty)) {
+    return isTed(parts.last) ? (parts.first, null) : (parts.first, parts.last);
   }
   return (raw.trim(), null);
 }
@@ -114,7 +162,7 @@ String formatViews(int n) {
   return '$n';
 }
 
-/// TED 최신 영상 목록. 마지막으로 받은 목록을 [cacheFile]에 저장해 바로 보여 준다.
+/// TED 영상 목록. 최신 영상과 분류(재생목록) 목록은 [cacheFile]에 저장해 바로 보여 준다.
 class TedCatalog {
   TedCatalog(this.ytDlp, this.cacheFile);
 
@@ -123,36 +171,92 @@ class TedCatalog {
 
   static const pageSize = 30;
 
-  /// 캐시에 남기는 최대 개수
+  /// 분류로 보여 줄 재생목록 최대 개수
+  static const maxPlaylists = 200;
+
+  /// 캐시에 남기는 최신 영상 최대 개수
   static const _keep = 300;
 
-  Future<List<TedVideo>> cached() async {
+  Future<Map<String, dynamic>> _readCache() async {
     try {
       final j = jsonDecode(await cacheFile.readAsString());
-      return [
-        for (final e in (j['videos'] as List).cast<Map<String, dynamic>>())
-          ?TedVideo.fromJson(e),
-      ];
+      return j is Map<String, dynamic> ? j : {};
     } on Object {
-      return const [];
+      return {};
     }
   }
 
-  /// [offset]개 다음부터 한 페이지 (0 = 최신)
-  Future<List<TedVideo>> fetch({int offset = 0}) async {
+  /// 저장을 차례로 (최신 영상과 분류를 한 파일에 쓰므로 동시에 쓰면 한쪽이 사라진다)
+  Future<void> _writing = Future.value();
+
+  Future<void> _writeCache(String key, Object value) => _writing = _writing
+      .then((_) async {
+        final j = await _readCache()
+          ..[key] = value;
+        await cacheFile.parent.create(recursive: true);
+        await cacheFile.writeAsString(jsonEncode(j));
+      })
+      .catchError((Object _) {});
+
+  static List<Map<String, dynamic>> _maps(Object? l) =>
+      l is List ? l.whereType<Map<String, dynamic>>().toList() : const [];
+
+  /// 저장된 최신 영상
+  Future<List<TedVideo>> cached() async => [
+    for (final e in _maps((await _readCache())['videos']))
+      ?TedVideo.fromJson(e),
+  ];
+
+  Future<void> save(List<TedVideo> videos) =>
+      _writeCache('videos', videos.take(_keep).map((v) => v.toJson()).toList());
+
+  /// 저장된 분류(재생목록)
+  Future<List<TedFeed>> cachedPlaylists() async => [
+    for (final e in _maps((await _readCache())['playlists']))
+      ?TedFeed.playlistFromEntry(e),
+  ];
+
+  /// TED 채널의 재생목록을 받아 저장한다
+  Future<List<TedFeed>> fetchPlaylists() async {
     final j = await ytDlp.listPlaylist(
-      tedChannelVideosUrl,
+      '$tedChannelUrl/playlists',
+      start: 1,
+      end: maxPlaylists,
+    );
+    final out = <TedFeed>[];
+    final seen = <String>{};
+    for (final e in _maps(j['entries'])) {
+      final f = TedFeed.playlistFromEntry(e);
+      if (f != null && seen.add(f.key)) out.add(f);
+    }
+    await _writeCache('playlists', [
+      for (final f in out) {'id': f.key, 'title': f.title},
+    ]);
+    return out;
+  }
+
+  /// [feed]의 [offset]개 다음부터 한 페이지
+  Future<TedPage> fetch(TedFeed feed, {int offset = 0}) async {
+    final j = await ytDlp.listPlaylist(
+      feed.url,
       start: offset + 1,
       end: offset + pageSize,
     );
-    final entries = (j['entries'] as List? ?? const [])
-        .whereType<Map<String, dynamic>>();
-    return [for (final e in entries) ?TedVideo.fromEntry(e)];
+    final entries = _maps(j['entries']);
+    return TedPage([
+      for (final e in entries) ?TedVideo.fromEntry(e),
+    ], entries.length);
   }
+}
 
-  Future<void> save(List<TedVideo> videos) async {
-    final list = videos.take(_keep).map((v) => v.toJson()).toList();
-    await cacheFile.parent.create(recursive: true);
-    await cacheFile.writeAsString(jsonEncode({'videos': list}));
-  }
+/// 한 페이지. 검색 결과에는 재생목록·채널도 섞여 있어 [videos]가 [received]보다 적을 수 있다.
+class TedPage {
+  const TedPage(this.videos, this.received);
+
+  final List<TedVideo> videos;
+
+  /// 걸러 내기 전 항목 수 (다음 페이지 위치·마지막 페이지 판단용)
+  final int received;
+
+  bool get isLast => received < TedCatalog.pageSize;
 }
