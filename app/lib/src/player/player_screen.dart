@@ -13,6 +13,7 @@ import '../pipeline/stt_engine.dart' show canTranscribe;
 import '../pipeline/subtitle_job.dart';
 import '../settings/app_settings.dart';
 import '../settings/settings_dialog.dart';
+import '../source/ted_catalog.dart';
 import '../source/youtube_url.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
@@ -23,6 +24,7 @@ import 'play_counts.dart';
 import 'playlist.dart';
 import 'recent_videos.dart';
 import 'resume.dart';
+import 'ted_browser.dart';
 import 'volume_gesture.dart';
 
 /// 자막 다시 만들기 메뉴
@@ -154,8 +156,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _view.showVocab = s.showVocab;
       _publishPlayInfo();
       // 개발용: DUALCUE_OPEN=<파일 경로> 로 실행하면 바로 연다 (실기기 자동 검증용)
+      // DUALCUE_OPEN=ted 는 TED 최신 강연 목록을 연다
       final auto = kDebugMode ? Platform.environment['DUALCUE_OPEN'] : null;
-      if (auto != null && auto.isNotEmpty) {
+      if (auto == 'ted') {
+        unawaited(_openTed());
+      } else if (auto != null && auto.isNotEmpty) {
         unawaited(
           parseYoutubeId(auto) != null
               ? _openYoutubeUrl(auto)
@@ -347,6 +352,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
     if (url == null) return;
     await _openYoutubeUrl(url);
+  }
+
+  /// TED 최신 강연 목록에서 고른 영상을 연다 (YouTube TED 채널)
+  Future<void> _openTed() async {
+    final dir = (await AppSettings.supportDir()).path;
+    final counts = await _countStore();
+    if (!mounted) return;
+    final id = await showDialog<String>(
+      context: context,
+      builder: (_) => TedBrowserDialog(
+        catalog: TedCatalog(_ytDlp, File('$dir/ted_catalog.json')),
+        watched: (id) async =>
+            await counts.get(PlaybackPositions.keyForYoutube(id)) > 0,
+      ),
+    );
+    if (id == null) return;
+    await _openYoutubeUrl(youtubeWatchUrl(id));
   }
 
   Future<void> _openYoutubeUrl(String url) async {
@@ -1005,6 +1027,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
             tooltip: 'YouTube 열기',
             icon: const Icon(Icons.smart_display),
             onPressed: _loading ? null : _openYoutube,
+          ),
+        // TED 목록도 yt-dlp로 받는다 (데스크톱만)
+        if (hasDesktopTools)
+          IconButton(
+            tooltip: 'TED 최신 강연',
+            icon: const Icon(Icons.record_voice_over),
+            onPressed: _loading ? null : _openTed,
           ),
         IconButton(
           tooltip: '최근 재생목록',

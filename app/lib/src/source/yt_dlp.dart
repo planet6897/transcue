@@ -243,6 +243,25 @@ class YtDlp {
     return YoutubeMedia.fromInfoJson(jsonDecode(out) as Map<String, dynamic>);
   }
 
+  /// 채널·재생목록의 영상 목록(`--flat-playlist`). [start]부터 [end]까지 (1부터, 끝 포함).
+  /// 영상마다 페이지를 열지 않아 30개에 몇 초면 된다. 업로드 날짜는 없다.
+  Future<Map<String, dynamic>> listPlaylist(
+    String url, {
+    required int start,
+    required int end,
+  }) async {
+    final out = await _run([
+      '--flat-playlist',
+      '-J',
+      '--playlist-start',
+      '$start',
+      '--playlist-end',
+      '$end',
+      url,
+    ]);
+    return jsonDecode(out) as Map<String, dynamic>;
+  }
+
   /// 자막을 VTT 텍스트로 받는다.
   ///
   /// 자막 URL을 직접 받지 않는 이유: YouTube 자동 번역 자막 등 일부 트랙은
