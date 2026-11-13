@@ -20,6 +20,29 @@ const minScreenBrightness = 0.1;
 double steppedBrightness(double current, double delta) =>
     (current + delta).clamp(minScreenBrightness, 1.0);
 
+/// 트랙패드(macOS·Windows 정밀 터치패드)의 두 손가락 밀기를 휠 칸으로 바꾼다.
+///
+/// 트랙패드는 휠 이벤트가 아니라 팬/줌 이벤트로 조금씩(몇 픽셀씩) 연달아 온다.
+/// 그대로 한 칸씩 처리하면 너무 빨라서, 이동 거리를 모아 [stepDistance]마다 한 칸으로 센다.
+/// 손가락을 위로 밀면 +, 아래로 밀면 − (터치 기기의 위/아래 밀기와 같은 방향).
+class TrackpadSteps {
+  /// 한 칸으로 셀 이동 거리 (논리 픽셀)
+  static const stepDistance = 40.0;
+
+  double _acc = 0;
+
+  /// 새로 밀기 시작할 때
+  void reset() => _acc = 0;
+
+  /// 세로 이동량 [dy](아래로 +)를 더하고, 새로 채워진 칸 수를 돌려준다 (위로 +)
+  int add(double dy) {
+    _acc -= dy;
+    final n = (_acc / stepDistance).truncate();
+    _acc -= n * stepDistance;
+    return n;
+  }
+}
+
 /// 휠 한 칸의 방향: 위로 굴리면 +1, 아래로 굴리면 -1
 int wheelStep(Offset scrollDelta) => scrollDelta.dy < 0
     ? 1
