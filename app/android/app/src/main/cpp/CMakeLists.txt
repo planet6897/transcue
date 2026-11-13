@@ -30,4 +30,4 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(whisper)
 
 add_library(transcue_whisper SHARED whisper_jni.cpp)
-target_link_libraries(transcue_whisper whisper log)
+target_link_libraries(transcue_whisper whisper parakeet log)

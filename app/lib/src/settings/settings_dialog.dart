@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../pipeline/tools.dart' show hasDesktopTools;
+import '../pipeline/stt_engine.dart' show canUseParakeet;
 import 'app_settings.dart';
 
 /// 설정 화면: Claude API 키, 번역 모델, 음성 인식 모델.
@@ -98,14 +98,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 ],
                 onChanged: (m) => setState(() => _whisper = m!),
               ),
-              // Parakeet은 데스크톱(whisper.cpp의 parakeet-cli)에서만 실행된다
-              if (hasDesktopTools) ...[
+              // Parakeet: 데스크톱은 parakeet-cli, Android는 앱에 함께 빌드된 whisper.cpp
+              if (canUseParakeet) ...[
                 const SizedBox(height: 12),
                 DropdownButtonFormField<EnglishStt>(
                   initialValue: _english,
-                  decoration: const InputDecoration(
-                    labelText: '영어 음성 인식',
-                  ),
+                  decoration: const InputDecoration(labelText: '영어 음성 인식'),
                   items: [
                     for (final m in EnglishStt.values)
                       DropdownMenuItem(value: m, child: Text(m.label)),
@@ -115,7 +113,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
               ],
               const SizedBox(height: 8),
               Text(
-                hasDesktopTools
+                canUseParakeet
                     ? '처음 사용할 때 모델을 한 번 내려받습니다. '
                           'Parakeet은 영어로 확인된 구간에만 쓰고, 다른 언어는 whisper로 인식합니다.'
                     : '처음 사용할 때 모델을 한 번 내려받습니다.',

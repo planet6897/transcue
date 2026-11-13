@@ -12,3 +12,9 @@ Java_com_transcue_app_WhisperBridge_nativeSpeechSegments(
     JNIEnv *, jobject, jstring, jint, jfloatArray) {
   return nullptr;
 }
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_transcue_app_WhisperBridge_nativeParakeet(
+    JNIEnv *, jobject, jstring, jint, jfloatArray) {
+  return nullptr;
+}
