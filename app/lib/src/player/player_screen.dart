@@ -23,6 +23,7 @@ import 'play_counts.dart';
 import 'playlist.dart';
 import 'recent_videos.dart';
 import 'resume.dart';
+import 'sentence_loop.dart';
 import 'volume_gesture.dart';
 
 /// 자막 다시 만들기 메뉴
@@ -100,6 +101,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Timer? _positionTimer;
   StreamSubscription<bool>? _playingSub;
 
+  /// 문장 반복 (켜져 있을 때만 있다). 횟수는 끄고 다시 켜도 기억한다.
+  SentenceLoop? _sentenceLoop;
+  var _sentenceRepeat = SentenceRepeat.forever;
+  StreamSubscription<Duration>? _sentenceLoopSub;
+
   /// 지금 영상의 반복 재생 상태와 재생 횟수 (화면 표시용)
   final _playInfo = ValueNotifier<({bool repeat, int count})>((
     repeat: false,
@@ -170,6 +176,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void dispose() {
     _completedSub?.cancel();
+    _sentenceLoopSub?.cancel();
     _playingSub?.cancel();
     _positionTimer?.cancel();
     unawaited(_rememberPosition());
@@ -552,6 +559,124 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// PopupMenuButton은 메뉴가 떠 있는 사이 조작부가 자동으로 사라져 버튼이 없어지면
   /// 고른 항목을 버린다. 그래서 메뉴를 직접 띄워 결과를 받는다.
+  // ---- 문장 반복 ----
+
+  /// 문장 반복 켜기/끄기 (L)
+  void _toggleSentenceLoop() =>
+      _setSentenceLoop(_sentenceLoop == null ? _sentenceRepeat : null);
+
+  /// [repeat]으로 문장 반복을 켠다. null이면 끈다.
+  void _setSentenceLoop(SentenceRepeat? repeat) {
+    if (repeat == null) {
+      _sentenceLoopSub?.cancel();
+      _sentenceLoopSub = null;
+      setState(() => _sentenceLoop = null);
+      _toast('문장 반복 꺼짐 (L)');
+      return;
+    }
+    _sentenceRepeat = repeat;
+    final loop = _sentenceLoop;
+    if (loop != null) {
+      setState(() => loop.repeat = repeat);
+    } else {
+      final created = SentenceLoop(repeat)
+        ..lockAt(_view.cues, _player.state.position);
+      setState(() => _sentenceLoop = created);
+      _sentenceLoopSub = _player.stream.position.listen(_onLoopPosition);
+    }
+    _toast(
+      _view.cues.isEmpty
+          ? '문장 반복 켜짐 · ${repeat.label} (자막이 생기면 반복합니다)'
+          : '문장 반복 켜짐 · ${repeat.label} (L)',
+    );
+  }
+
+  void _onLoopPosition(Duration pos) {
+    final loop = _sentenceLoop;
+    if (loop == null) return;
+    final before = (loop.cue, loop.round);
+    final back = loop.onPosition(_view.cues, pos);
+    if (back != null) {
+      if (kDebugMode) {
+        debugPrint(
+          '[loop] ${pos.inMilliseconds}ms -> ${back.inMilliseconds}ms '
+          'round ${loop.round} "${loop.cue?.original}"',
+        );
+      }
+      unawaited(_player.seek(back));
+    }
+    // 몇 번째 듣는지 버튼에 보여 준다 (바뀔 때만 다시 그린다)
+    if (before != (loop.cue, loop.round) && mounted) setState(() {});
+  }
+
+  /// 문장 반복 버튼: 횟수를 고르거나 끈다
+  Future<void> _showSentenceLoopMenu(BuildContext button) async {
+    final box = button.findRenderObject()! as RenderBox;
+    final overlay =
+        Navigator.of(button).overlay!.context.findRenderObject()! as RenderBox;
+    final on = _sentenceLoop?.repeat;
+    final picked = await showMenu<SentenceRepeat?>(
+      context: button,
+      position: RelativeRect.fromRect(
+        box.localToGlobal(Offset.zero, ancestor: overlay) & box.size,
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        for (final r in SentenceRepeat.values)
+          CheckedPopupMenuItem(
+            value: r,
+            checked: on == r,
+            child: Text(r.label),
+          ),
+        if (on != null) ...[
+          const PopupMenuDivider(),
+          PopupMenuItem(
+            value: null,
+            onTap: () => _menuPickedOff = true,
+            child: const Text('끄기'),
+          ),
+        ],
+      ],
+    );
+    // 메뉴 밖을 눌러 닫으면 picked도 null이므로, 끄기는 켜져 있을 때 고른 경우만
+    if (!mounted) return;
+    if (picked != null) {
+      _setSentenceLoop(picked);
+    } else if (on != null && _menuPickedOff) {
+      _setSentenceLoop(null);
+    }
+    _menuPickedOff = false;
+  }
+
+  /// '끄기'를 골랐는지 (메뉴 밖을 눌러 닫은 것과 구별)
+  var _menuPickedOff = false;
+
+  Widget _sentenceLoopButton() {
+    final loop = _sentenceLoop;
+    final times = loop?.repeat.times;
+    final tip = loop == null
+        ? '문장 반복 꺼짐 (L)'
+        : '문장 반복 켜짐 · ${loop.repeat.label} (L)';
+    final icon = Icon(
+      Icons.loop,
+      color: loop == null ? null : const Color(0xFF80DEEA),
+    );
+    return Builder(
+      builder: (button) => IconButton(
+        tooltip: tip,
+        icon: loop == null || loop.cue == null
+            ? icon
+            : Badge(
+                label: Text(
+                  times == 0 ? '${loop.round}' : '${loop.round}/$times',
+                ),
+                child: icon,
+              ),
+        onPressed: () => _showSentenceLoopMenu(button),
+      ),
+    );
+  }
+
   Future<void> _showRegenMenu(BuildContext button) async {
     final box = button.findRenderObject()! as RenderBox;
     final overlay =
@@ -695,6 +820,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _nudge(const Duration(milliseconds: 200)),
     const SingleActivator(LogicalKeyboardKey.keyV): _toggleVocab,
     const SingleActivator(LogicalKeyboardKey.keyR): _toggleRepeat,
+    const SingleActivator(LogicalKeyboardKey.keyL): _toggleSentenceLoop,
     const SingleActivator(LogicalKeyboardKey.keyR, shift: true): _resetCount,
     // 처음부터
     const SingleActivator(LogicalKeyboardKey.home): () =>
@@ -781,6 +907,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
     _sentenceTarget = target;
     _sentenceSeekAt = now;
+    // 문장 반복 중이면 옮긴 문장을 처음부터 반복한다
+    _sentenceLoop?.lockAt(_view.cues, target);
     _player.seek(target);
     return true;
   }
@@ -979,6 +1107,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           onPressed: _toggleRepeat,
         ),
+        _sentenceLoopButton(),
         IconButton(
           tooltip: '이전 영상 (P)',
           icon: const Icon(Icons.skip_previous),
