@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../source/youtube_url.dart';
 import 'resume.dart';
 
 /// 최근에 연 영상 하나. [source]는 파일 경로 또는 YouTube 주소.
@@ -93,6 +94,16 @@ class RecentRow {
 }
 
 /// 최근 재생목록. 고른 영상의 source를 돌려준다.
+/// 최근 재생목록 아이콘: TED 강연 / 다른 YouTube 영상 / 내 파일.
+/// TED는 상단 메뉴의 TED 버튼과 같은 아이콘이다.
+IconData recentIcon(RecentVideo v) {
+  if (parseYoutubeId(v.source) == null) return Icons.movie_outlined;
+  // "제목 | 강연자 | TED", "| TEDxSeoul", "| TED Countdown"
+  return RegExp(r'\| TED[\w -]*$').hasMatch(v.title.trim())
+      ? Icons.record_voice_over
+      : Icons.smart_display;
+}
+
 class RecentVideosDialog extends StatefulWidget {
   const RecentVideosDialog({
     super.key,
@@ -127,7 +138,7 @@ class _RecentVideosDialogState extends State<RecentVideosDialog> {
                   final detail = row.detail;
                   return ListTile(
                     enabled: row.available,
-                    leading: const Icon(Icons.movie_outlined),
+                    leading: Icon(recentIcon(row.video)),
                     title: Text(
                       row.video.title,
                       maxLines: 1,

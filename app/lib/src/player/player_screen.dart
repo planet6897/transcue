@@ -14,6 +14,7 @@ import '../pipeline/stt_engine.dart' show canTranscribe;
 import '../pipeline/subtitle_job.dart';
 import '../settings/app_settings.dart';
 import '../settings/settings_dialog.dart';
+import '../source/ted_catalog.dart';
 import '../source/youtube_url.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
@@ -25,6 +26,7 @@ import 'playlist.dart';
 import 'recent_videos.dart';
 import 'resume.dart';
 import 'sentence_loop.dart';
+import 'ted_browser.dart';
 import 'volume_gesture.dart';
 
 /// 자막 다시 만들기 메뉴
@@ -164,8 +166,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _view.showVocab = s.showVocab;
       _publishPlayInfo();
       // 개발용: DUALCUE_OPEN=<파일 경로> 로 실행하면 바로 연다 (실기기 자동 검증용)
+      // DUALCUE_OPEN=ted 는 TED 강연 목록을 연다
       final auto = kDebugMode ? Platform.environment['DUALCUE_OPEN'] : null;
-      if (auto != null && auto.isNotEmpty) {
+      if (auto == 'ted') {
+        unawaited(_openTed());
+      } else if (auto != null && auto.isNotEmpty) {
         unawaited(
           parseYoutubeId(auto) != null
               ? _openYoutubeUrl(auto)
@@ -359,6 +364,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
     if (url == null) return;
     await _openYoutubeUrl(url);
+  }
+
+  /// TED 강연 목록(최신·분류·검색)에서 고른 영상을 연다 (YouTube TED 채널)
+  Future<void> _openTed() async {
+    final dir = (await AppSettings.supportDir()).path;
+    final counts = await _countStore();
+    if (!mounted) return;
+    final id = await showDialog<String>(
+      context: context,
+      builder: (_) => TedBrowserDialog(
+        catalog: TedCatalog(_ytDlp, File('$dir/ted_catalog.json')),
+        watched: (id) async =>
+            await counts.get(PlaybackPositions.keyForYoutube(id)) > 0,
+      ),
+    );
+    if (id == null) return;
+    await _openYoutubeUrl(youtubeWatchUrl(id));
   }
 
   Future<void> _openYoutubeUrl(String url) async {
@@ -1098,11 +1120,32 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
   );
 
-  /// 상단 메뉴 버튼. 버튼이 포커스를 가져가면 Space/Enter가 버튼을 누르게 되므로 제외한다.
+  /// 상단 메뉴 묶음 사이 구분선
+  static const _menuDivider = SizedBox(
+    height: 24,
+    child: VerticalDivider(width: 13, thickness: 1, color: Colors.white24),
+  );
+
+  /// 상단 메뉴. 기능별로 묶고, 창이 좁으면 왼쪽부터 가려지므로(가로 스크롤) 자주 쓰는
+  /// 것을 오른쪽에 둔다: 자막 도구 | 자막 보기 | 재생 | 열기 | 설정
+  /// 버튼이 포커스를 가져가면 Space/Enter가 버튼을 누르게 되므로 제외한다.
   Widget _menuActions() => ExcludeFocus(
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        IconButton(
+          tooltip: 'AI로 다시 번역',
+          icon: const Icon(Icons.auto_awesome),
+          onPressed: _job?.canRetranslate ?? false ? _retranslate : null,
+        ),
+        Builder(
+          builder: (button) => IconButton(
+            tooltip: '자막·번역 다시 만들기',
+            icon: const Icon(Icons.restart_alt),
+            onPressed: _job == null ? null : () => _showRegenMenu(button),
+          ),
+        ),
+        _menuDivider,
         IconButton(
           tooltip: '원문 자막',
           icon: Icon(
@@ -1129,18 +1172,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           onPressed: _toggleVocab,
         ),
-        IconButton(
-          tooltip: 'AI로 다시 번역',
-          icon: const Icon(Icons.auto_awesome),
-          onPressed: _job?.canRetranslate ?? false ? _retranslate : null,
-        ),
-        Builder(
-          builder: (button) => IconButton(
-            tooltip: '자막·번역 다시 만들기',
-            icon: const Icon(Icons.restart_alt),
-            onPressed: _job == null ? null : () => _showRegenMenu(button),
-          ),
-        ),
+        _menuDivider,
         IconButton(
           tooltip: _settings.repeatVideo ? '반복 재생 켜짐 (R)' : '반복 재생 꺼짐 (R)',
           icon: Icon(
@@ -1170,12 +1202,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           onPressed: _toggleAutoPlayNext,
         ),
+        _menuDivider,
         // YouTube는 yt-dlp가 필요해 데스크톱만
         if (_showYoutubeButton && hasDesktopTools)
           IconButton(
             tooltip: 'YouTube 열기',
             icon: const Icon(Icons.smart_display),
             onPressed: _loading ? null : _openYoutube,
+          ),
+        // TED 목록도 yt-dlp로 받는다 (데스크톱만)
+        if (hasDesktopTools)
+          IconButton(
+            tooltip: '영어 강연·학습 채널 (TED·BBC·VOA)',
+            icon: const Icon(Icons.record_voice_over),
+            onPressed: _loading ? null : _openTed,
           ),
         IconButton(
           tooltip: '최근 재생목록',
@@ -1187,6 +1227,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           icon: const Icon(Icons.folder_open),
           onPressed: _loading ? null : _openFile,
         ),
+        _menuDivider,
         IconButton(
           tooltip: '설정 (Claude API 키)',
           icon: Icon(
