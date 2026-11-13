@@ -10,6 +10,23 @@ const volumeKeyStep = 5.0;
 double steppedVolume(double current, double delta) =>
     (current + delta).clamp(0.0, 100.0);
 
+/// 휠 한 칸에 바뀌는 화면 밝기 (데스크톱, 0~1)
+const brightnessStep = 0.05;
+
+/// 데스크톱 화면 밝기의 하한. 영상을 덮어 어둡게 하는 방식이라 완전히 까맣게 되지 않게.
+const minScreenBrightness = 0.1;
+
+/// [current]에서 [delta]만큼 바꾼 화면 밝기 (데스크톱)
+double steppedBrightness(double current, double delta) =>
+    (current + delta).clamp(minScreenBrightness, 1.0);
+
+/// 휠 한 칸의 방향: 위로 굴리면 +1, 아래로 굴리면 -1
+int wheelStep(Offset scrollDelta) => scrollDelta.dy < 0
+    ? 1
+    : scrollDelta.dy > 0
+    ? -1
+    : 0;
+
 /// 화면을 위/아래로 밀어 조절 (터치 기기): 오른쪽 절반은 소리, 왼쪽 절반은 밝기.
 /// 소리는 기기 미디어 음량 (볼륨 버튼과 같은 값), 밝기는 이 앱 화면만 바꾸고
 /// 재생 화면을 나가면 기기 설정 밝기로 돌아간다.
