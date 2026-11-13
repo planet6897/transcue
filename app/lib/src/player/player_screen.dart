@@ -920,6 +920,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
   }
 
+  /// 트랙패드 두 손가락 밀기 (macOS·Windows 정밀 터치패드): 휠과 같은 배치.
+  /// 시작한 자리로 소리/밝기를 정하고, 이동 거리를 모아 칸으로 바꾼다.
+  final _trackpad = TrackpadSteps();
+  bool _trackpadBrightness = false;
+
+  void _onPanZoomStart(PointerPanZoomStartEvent e, double width) {
+    _trackpad.reset();
+    _trackpadBrightness = e.localPosition.dx < width / 2;
+  }
+
+  void _onPanZoomUpdate(PointerPanZoomUpdateEvent e) {
+    // 두 손가락 벌리기·오므리기(확대)는 무시
+    if ((e.scale - 1).abs() > 0.05) return;
+    final steps = _trackpad.add(e.panDelta.dy);
+    if (steps == 0) return;
+    if (_trackpadBrightness) {
+      _changeBrightness(steps * brightnessStep);
+    } else {
+      _changeVolume(steps * volumeKeyStep);
+    }
+  }
+
   /// 화면 밝기를 바꾸고 화면 가운데에 잠깐 보여 준다 (데스크톱)
   void _changeBrightness(double delta) {
     final b = steppedBrightness(_screenBrightness.value, delta);
@@ -1383,6 +1405,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                   behavior: HitTestBehavior.translucent,
                                   onPointerSignal: (e) =>
                                       _onWheel(e, box.maxWidth),
+                                  onPointerPanZoomStart: (e) =>
+                                      _onPanZoomStart(e, box.maxWidth),
+                                  onPointerPanZoomUpdate: _onPanZoomUpdate,
                                   child: GestureDetector(
                                     behavior: HitTestBehavior.translucent,
                                     onTap: _onVideoClick,
