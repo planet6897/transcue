@@ -272,6 +272,107 @@ void main() {
     expect(p2.videos.first.title, 'Talk 30'); // 31번째 항목 (i=30)
   });
 
+  group('채널', () {
+    VideoChannel ch(String id) => VideoChannel.byId(id);
+
+    test('5개 채널, 주소', () {
+      expect(VideoChannel.all.map((c) => c.name), [
+        'TED',
+        'TED-Ed',
+        'TEDx Talks',
+        'BBC Learning English',
+        'VOA Learning English',
+      ]);
+      expect(
+        TedFeed.latestOf(ch('bbc-le')).url,
+        'https://www.youtube.com/@bbclearningenglish/videos',
+      );
+      expect(
+        TedFeed.search('grammar', channel: ch('voa-le')).url,
+        'https://www.youtube.com/@VOALearningEnglish/search?query=grammar',
+      );
+      expect(TedFeed.latest, TedFeed.latestOf(VideoChannel.ted));
+      expect(VideoChannel.byId('없는 채널'), VideoChannel.ted);
+    });
+
+    test('같은 검색어라도 채널이 다르면 다른 목록', () {
+      expect(
+        TedFeed.search('ai') == TedFeed.search('ai', channel: ch('tedx')),
+        isFalse,
+      );
+    });
+
+    test('채널마다 제목 형식 (실제 제목)', () {
+      expect(
+        splitTitle(
+          'Can you solve the Billy Bonka riddle? - Edwin F. Meyer',
+          TitleStyle.dash,
+        ),
+        ('Can you solve the Billy Bonka riddle?', 'Edwin F. Meyer'),
+      );
+      // 강연자 없는 TED-Ed 제목은 그대로
+      expect(
+        splitTitle(
+          'How to effectively use visuals in your presentation',
+          TitleStyle.dash,
+        ),
+        ('How to effectively use visuals in your presentation', null),
+      );
+      // " - " 뒤가 이름이 아니면 떼지 않는다
+      expect(splitDashTitle('Grammar - what is the present perfect?'), (
+        'Grammar - what is the present perfect?',
+        null,
+      ));
+      expect(
+        splitTitle(
+          "Why moms shouldn't have to do it all | Onnie Michalsky | TEDxBillings",
+          TitleStyle.ted,
+        ),
+        ("Why moms shouldn't have to do it all", 'Onnie Michalsky'),
+      );
+      expect(
+        splitTitle('Everyday Grammar Video: Ramen | Part 2', TitleStyle.plain),
+        ('Everyday Grammar Video: Ramen | Part 2', null),
+      );
+    });
+
+    test('채널별 캐시, TED는 예전 캐시 그대로, 마지막 채널 기억', () async {
+      final dir = await Directory.systemTemp.createTemp('ted_ch_');
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/ted.json');
+      // 채널을 나누기 전에 저장된 TED 캐시
+      await file.writeAsString(
+        '{"videos":[{"id":"81iS7JsTGmk","title":"Old TED"}]}',
+      );
+      final cat = TedCatalog(YtDlp(executable: 'unused'), file);
+      expect((await cat.cached()).single.title, 'Old TED');
+      expect(await cat.cached(ch('bbc-le')), isEmpty);
+      expect(await cat.lastChannel(), VideoChannel.ted);
+
+      await cat.save([v('bbc')], ch('bbc-le'));
+      await cat.saveLastChannel(ch('bbc-le'));
+      expect(ids(await cat.cached(ch('bbc-le'))), ['bbc']);
+      expect((await cat.cached()).single.title, 'Old TED');
+      expect(await cat.lastChannel(), ch('bbc-le'));
+    });
+
+    test('채널 영상은 그 채널 형식으로 강연자를 뗀다', () async {
+      final tedEd = ch('ted-ed');
+      final yt = _FakeYtDlp({
+        TedFeed.latestOf(tedEd).url: [
+          {
+            'id': 'abcdefghijk',
+            'title': 'Why is pepper such a popular spice? - Carolyn Beans',
+          },
+        ],
+      });
+      final cat = TedCatalog(yt, File('unused.json'));
+      final p = await cat.fetch(TedFeed.latestOf(tedEd));
+      expect(p.videos.single.title, 'Why is pepper such a popular spice?');
+      expect(p.videos.single.speaker, 'Carolyn Beans');
+    });
+  });
+
   test('캐시 저장·불러오기, 깨진 캐시는 빈 목록', () async {
     final dir = await Directory.systemTemp.createTemp('ted_test_');
     addTearDown(() => dir.delete(recursive: true));

@@ -3,53 +3,150 @@ import 'dart:io';
 
 import 'yt_dlp.dart';
 
-/// TED 공식 YouTube 채널.
+/// YouTube 제목에서 강연자를 떼는 방식
+enum TitleStyle {
+  /// "제목 | 강연자 | TED" (TED, TEDx)
+  ted,
+
+  /// "제목 - 강연자" (TED-Ed)
+  dash,
+
+  /// 강연자 없이 제목만 (BBC·VOA Learning English)
+  plain,
+}
+
+/// 영어 강연·학습용 YouTube 채널.
 ///
 /// TED.com은 자동 접근을 막고 있어(403 "automated access to TED.com is not permitted")
 /// YouTube 채널을 쓴다. TED 번역 봉사자 자막도 YouTube에 함께 올라간다.
+class VideoChannel {
+  const VideoChannel({
+    required this.id,
+    required this.name,
+    required this.handle,
+    required this.about,
+    this.titleStyle = TitleStyle.plain,
+  });
+
+  /// 캐시·설정에 쓰는 고유 이름
+  final String id;
+  final String name;
+
+  /// YouTube 채널 핸들 (@ 뒤)
+  final String handle;
+
+  /// 채널 고르는 메뉴에 붙는 짧은 설명
+  final String about;
+  final TitleStyle titleStyle;
+
+  String get url => 'https://www.youtube.com/@$handle';
+
+  static const ted = VideoChannel(
+    id: 'ted',
+    name: 'TED',
+    handle: 'TED',
+    about: '강연',
+    titleStyle: TitleStyle.ted,
+  );
+
+  static const all = [
+    ted,
+    VideoChannel(
+      id: 'ted-ed',
+      name: 'TED-Ed',
+      handle: 'TEDEd',
+      about: '5분 내외 애니메이션 강의',
+      titleStyle: TitleStyle.dash,
+    ),
+    VideoChannel(
+      id: 'tedx',
+      name: 'TEDx Talks',
+      handle: 'TEDx',
+      about: '세계 각지 강연',
+      titleStyle: TitleStyle.ted,
+    ),
+    VideoChannel(
+      id: 'bbc-le',
+      name: 'BBC Learning English',
+      handle: 'bbclearningenglish',
+      about: '영어 학습 (영국 영어)',
+    ),
+    VideoChannel(
+      id: 'voa-le',
+      name: 'VOA Learning English',
+      handle: 'VOALearningEnglish',
+      about: '쉽고 느린 영어 (미국 영어)',
+    ),
+  ];
+
+  static VideoChannel byId(String? id) =>
+      all.firstWhere((c) => c.id == id, orElse: () => ted);
+}
+
+/// TED 채널 주소
 const tedChannelUrl = 'https://www.youtube.com/@TED';
 
 enum TedFeedKind { latest, playlist, search }
 
-/// 영상 목록을 어디서 가져올지: 최신 업로드 / TED 재생목록(분류) / 채널 검색
+/// 영상 목록을 어디서 가져올지: 채널의 최신 업로드 / 재생목록(분류) / 채널 안 검색
 class TedFeed {
-  const TedFeed._(this.kind, this.key, this.title);
+  const TedFeed._(this.kind, this.key, this.title, this.channel);
 
-  static const latest = TedFeed._(TedFeedKind.latest, '', '최신 강연');
+  /// TED 채널의 최신 영상
+  static const latest = TedFeed.latestOf(VideoChannel.ted);
 
-  /// TED 채널의 재생목록 하나 ("Best TED Talks on psychology" 등)
-  const TedFeed.playlist(String id, String title)
-    : this._(TedFeedKind.playlist, id, title);
+  /// [channel]의 최신 업로드
+  const TedFeed.latestOf(VideoChannel channel)
+    : this._(TedFeedKind.latest, '', '최신 영상', channel);
 
-  /// TED 채널 안에서 검색 (관련도순)
-  TedFeed.search(String query)
-    : this._(TedFeedKind.search, query.trim(), '“${query.trim()}” 검색 결과');
+  /// 채널의 재생목록 하나 ("Best TED Talks on psychology" 등)
+  const TedFeed.playlist(
+    String id,
+    String title, {
+    VideoChannel channel = VideoChannel.ted,
+  }) : this._(TedFeedKind.playlist, id, title, channel);
+
+  /// 채널 안에서 검색 (관련도순)
+  TedFeed.search(String query, {VideoChannel channel = VideoChannel.ted})
+    : this._(
+        TedFeedKind.search,
+        query.trim(),
+        '“${query.trim()}” 검색 결과',
+        channel,
+      );
 
   final TedFeedKind kind;
 
   /// 재생목록 ID 또는 검색어
   final String key;
   final String title;
+  final VideoChannel channel;
 
   String get url => switch (kind) {
-    TedFeedKind.latest => '$tedChannelUrl/videos',
+    TedFeedKind.latest => '${channel.url}/videos',
     TedFeedKind.playlist => 'https://www.youtube.com/playlist?list=$key',
     TedFeedKind.search =>
-      '$tedChannelUrl/search?query=${Uri.encodeQueryComponent(key)}',
+      '${channel.url}/search?query=${Uri.encodeQueryComponent(key)}',
   };
 
   @override
   bool operator ==(Object other) =>
-      other is TedFeed && other.kind == kind && other.key == key;
+      other is TedFeed &&
+      other.kind == kind &&
+      other.key == key &&
+      other.channel.id == channel.id;
 
   @override
-  int get hashCode => Object.hash(kind, key);
+  int get hashCode => Object.hash(kind, key, channel.id);
 
   /// `yt-dlp --flat-playlist`로 받은 채널 재생목록 항목. 재생목록이 아니면 null.
-  static TedFeed? playlistFromEntry(Map<String, dynamic> e) {
+  static TedFeed? playlistFromEntry(
+    Map<String, dynamic> e, {
+    VideoChannel channel = VideoChannel.ted,
+  }) {
     final id = e['id'], title = e['title'];
     if (id is! String || title is! String || !id.startsWith('PL')) return null;
-    return TedFeed.playlist(id, title.trim());
+    return TedFeed.playlist(id, title.trim(), channel: channel);
   }
 }
 
@@ -79,11 +176,14 @@ class TedVideo {
   String get thumbnailUrl => 'https://i.ytimg.com/vi/$id/mqdefault.jpg';
 
   /// `yt-dlp --flat-playlist` 항목에서 만든다. 영상이 아니면 null.
-  static TedVideo? fromEntry(Map<String, dynamic> e) {
+  static TedVideo? fromEntry(
+    Map<String, dynamic> e, {
+    TitleStyle style = TitleStyle.ted,
+  }) {
     final id = e['id'];
     final raw = e['title'];
     if (id is! String || raw is! String || id.length != 11) return null;
-    final (title, speaker) = splitTedTitle(raw);
+    final (title, speaker) = splitTitle(raw, style);
     final d = e['duration'];
     final v = e['view_count'];
     final t = e['timestamp'];
@@ -123,6 +223,27 @@ class TedVideo {
           : null,
     );
   }
+}
+
+/// 채널의 제목 형식에 맞춰 강연자를 뗀다
+(String, String?) splitTitle(String raw, TitleStyle style) => switch (style) {
+  TitleStyle.ted => splitTedTitle(raw),
+  TitleStyle.dash => splitDashTitle(raw),
+  TitleStyle.plain => (raw.trim(), null),
+};
+
+/// "제목 - 강연자" (TED-Ed). 마지막 " - " 뒤가 사람 이름처럼 짧을 때만 뗀다.
+(String, String?) splitDashTitle(String raw) {
+  final t = raw.trim();
+  final i = t.lastIndexOf(' - ');
+  if (i <= 0) return (t, null);
+  final name = t.substring(i + 3).trim();
+  final looksLikeName =
+      name.isNotEmpty &&
+      name.split(RegExp(r'\s+')).length <= 6 &&
+      !name.contains('?') &&
+      !name.contains(':');
+  return looksLikeName ? (t.substring(0, i).trim(), name) : (t, null);
 }
 
 /// YouTube 제목에서 강연자를 뗀다. 형식이 다르면 제목 그대로.
@@ -284,35 +405,56 @@ class TedCatalog {
   static List<Map<String, dynamic>> _maps(Object? l) =>
       l is List ? l.whereType<Map<String, dynamic>>().toList() : const [];
 
+  /// 캐시 키. TED는 채널을 나누기 전 이름을 그대로 써서 기존 캐시를 살린다.
+  static String _key(VideoChannel c, String what) =>
+      c.id == VideoChannel.ted.id ? what : '${c.id}.$what';
+
+  /// 마지막으로 본 채널
+  Future<VideoChannel> lastChannel() async =>
+      VideoChannel.byId((await _readCache())['channel'] as String?);
+
+  Future<void> saveLastChannel(VideoChannel c) => _writeCache('channel', c.id);
+
   /// 저장된 최신 영상
-  Future<List<TedVideo>> cached() async => [
-    for (final e in _maps((await _readCache())['videos']))
+  Future<List<TedVideo>> cached([
+    VideoChannel channel = VideoChannel.ted,
+  ]) async => [
+    for (final e in _maps((await _readCache())[_key(channel, 'videos')]))
       ?TedVideo.fromJson(e),
   ];
 
-  Future<void> save(List<TedVideo> videos) =>
-      _writeCache('videos', videos.take(_keep).map((v) => v.toJson()).toList());
+  Future<void> save(
+    List<TedVideo> videos, [
+    VideoChannel channel = VideoChannel.ted,
+  ]) => _writeCache(
+    _key(channel, 'videos'),
+    videos.take(_keep).map((v) => v.toJson()).toList(),
+  );
 
   /// 저장된 분류(재생목록)
-  Future<List<TedFeed>> cachedPlaylists() async => [
-    for (final e in _maps((await _readCache())['playlists']))
-      ?TedFeed.playlistFromEntry(e),
+  Future<List<TedFeed>> cachedPlaylists([
+    VideoChannel channel = VideoChannel.ted,
+  ]) async => [
+    for (final e in _maps((await _readCache())[_key(channel, 'playlists')]))
+      ?TedFeed.playlistFromEntry(e, channel: channel),
   ];
 
-  /// TED 채널의 재생목록을 받아 저장한다
-  Future<List<TedFeed>> fetchPlaylists() async {
+  /// 채널의 재생목록을 받아 저장한다
+  Future<List<TedFeed>> fetchPlaylists([
+    VideoChannel channel = VideoChannel.ted,
+  ]) async {
     final j = await ytDlp.listPlaylist(
-      '$tedChannelUrl/playlists',
+      '${channel.url}/playlists',
       start: 1,
       end: maxPlaylists,
     );
     final out = <TedFeed>[];
     final seen = <String>{};
     for (final e in _maps(j['entries'])) {
-      final f = TedFeed.playlistFromEntry(e);
+      final f = TedFeed.playlistFromEntry(e, channel: channel);
       if (f != null && seen.add(f.key)) out.add(f);
     }
-    await _writeCache('playlists', [
+    await _writeCache(_key(channel, 'playlists'), [
       for (final f in out) {'id': f.key, 'title': f.title},
     ]);
     return out;
@@ -327,7 +469,8 @@ class TedCatalog {
     );
     final entries = _maps(j['entries']);
     return TedPage([
-      for (final e in entries) ?TedVideo.fromEntry(e),
+      for (final e in entries)
+        ?TedVideo.fromEntry(e, style: feed.channel.titleStyle),
     ], entries.length);
   }
 }

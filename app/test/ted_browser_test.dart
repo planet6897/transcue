@@ -81,6 +81,9 @@ void main() {
       'https://www.youtube.com/playlist?list=PL0': [
         _video('psy1', 'Why Depression Isn’t What We Think | Lisa M | TED'),
       ],
+      'https://www.youtube.com/@bbclearningenglish/videos': [
+        _video('bbc1', '6 Minute English: Is AI making us lazy?'),
+      ],
       TedFeed.search('happiness').url: [
         _video('hap1', 'The happy secret to better work | Shawn Achor'),
       ],
@@ -166,5 +169,36 @@ void main() {
     expect(y('Latest talk 38'), lessThan(y('Latest talk 33')));
     expect(find.text('불러온 40개 중 2개'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('채널을 바꾸면 그 채널의 최신 영상을 보여 주고, 다음에 열 때 기억한다', (tester) async {
+    await open(tester, const Size(1280, 800));
+    expect(find.text('Latest talk 0'), findsOneWidget);
+
+    await tester.tap(find.text('TED').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('BBC Learning English').last);
+    await tester.pump();
+    await settle(tester, find.text('6 Minute English: Is AI making us lazy?'));
+    expect(find.text('Latest talk 0'), findsNothing);
+    // 제목에 강연자가 없는 채널은 그대로
+    expect(find.textContaining('6 Minute English'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // 저장은 앞선 캐시 저장 뒤에 차례로 일어난다. 파일 쓰기 뒤의 처리는 pump 때
+    // 진행되므로 기다리기와 pump를 번갈아 하며 마지막 채널이 저장되기를 기다린다.
+    final reader = TedCatalog(
+      YtDlp(executable: 'unused'),
+      File('${dir.path}/ted.json'),
+    );
+    String? last;
+    for (var i = 0; i < 50 && last != 'bbc-le'; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+      last = (await tester.runAsync(reader.lastChannel))?.id;
+    }
+    expect(last, 'bbc-le');
   });
 }

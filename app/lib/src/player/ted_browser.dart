@@ -6,7 +6,8 @@ import 'package:flutter/material.dart';
 import '../source/ted_catalog.dart';
 import 'resume.dart' show formatPosition;
 
-/// TED 강연 고르기: 왼쪽은 분류(최신 강연 + TED 재생목록), 오른쪽은 영상, 위는 검색.
+/// 영어 강연·학습 채널(TED, TED-Ed, TEDx, BBC·VOA Learning English)에서 영상 고르기.
+/// 위는 채널·검색, 왼쪽은 분류(최신 영상 + 채널 재생목록), 오른쪽은 영상.
 /// 고른 영상의 YouTube ID를 돌려준다.
 ///
 /// 자막이 없는 영상도 음성 인식·번역으로 이중 자막을 만들 수 있으므로 거르지 않는다.
@@ -37,7 +38,10 @@ class _FeedState {
 }
 
 class _TedBrowserDialogState extends State<TedBrowserDialog> {
+  /// 지금 보는 채널 (다음에 열 때 이어서 보여 준다)
+  var _channel = VideoChannel.ted;
   var _feed = TedFeed.latest;
+  final _startedChannels = <String>{};
 
   /// 길이로 거른 영상이 이보다 적으면 다음 페이지를 알아서 불러온다 (최대 [_maxAutoLoad]개까지)
   static const _minFiltered = 10;
@@ -49,10 +53,14 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
   /// 재생 시간 필터 (분류를 바꿔도 유지)
   var _length = TedLength.any;
   final _feeds = <TedFeed, _FeedState>{};
-  var _playlists = <TedFeed>[];
-  var _playlistsLoading = false;
 
-  /// 검색해 본 것 (분류 목록 위에 보여 다시 고를 수 있게)
+  /// 채널별 분류(재생목록)와 받는 중인 채널
+  final _playlistsBy = <String, List<TedFeed>>{};
+  final _playlistsLoadingFor = <String>{};
+  List<TedFeed> get _playlists => _playlistsBy[_channel.id] ?? const [];
+  bool get _playlistsLoading => _playlistsLoadingFor.contains(_channel.id);
+
+  /// 검색해 본 것 (분류 목록 위에 보여 다시 고를 수 있게, 채널별로 최근 5개)
   final _searches = <TedFeed>[];
 
   final _watched = <String>{};
@@ -68,8 +76,27 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
     super.initState();
     _scroll.addListener(_onScroll);
     _filter.addListener(() => setState(() {}));
-    unawaited(_startLatest());
-    unawaited(_loadPlaylists());
+    unawaited(_start());
+  }
+
+  Future<void> _start() async {
+    final last = await widget.catalog.lastChannel();
+    if (mounted) _switchChannel(last, remember: false);
+  }
+
+  /// 채널을 바꾼다. 받은 목록은 열려 있는 동안 채널별로 기억한다.
+  void _switchChannel(VideoChannel c, {bool remember = true}) {
+    // _feeds는 그리기만 해도 빈 항목이 생기므로 받기 시작한 채널을 따로 센다
+    final first = _startedChannels.add(c.id);
+    setState(() {
+      _channel = c;
+      _feed = TedFeed.latestOf(c);
+      _filter.clear();
+    });
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+    if (first) unawaited(_startLatest(c));
+    if (!_playlistsBy.containsKey(c.id)) unawaited(_loadPlaylists(c));
+    if (remember) unawaited(widget.catalog.saveLastChannel(c));
   }
 
   @override
@@ -82,20 +109,23 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
 
   // ---- 분류 ----
 
-  Future<void> _loadPlaylists() async {
-    final cached = await widget.catalog.cachedPlaylists();
+  Future<void> _loadPlaylists(VideoChannel c) async {
+    _playlistsBy[c.id] = const [];
+    final cached = await widget.catalog.cachedPlaylists(c);
     if (!mounted) return;
     setState(() {
-      _playlists = cached;
-      _playlistsLoading = true;
+      _playlistsBy[c.id] = cached;
+      _playlistsLoadingFor.add(c.id);
     });
     try {
-      final fresh = await widget.catalog.fetchPlaylists();
-      if (mounted && fresh.isNotEmpty) setState(() => _playlists = fresh);
+      final fresh = await widget.catalog.fetchPlaylists(c);
+      if (mounted && fresh.isNotEmpty) {
+        setState(() => _playlistsBy[c.id] = fresh);
+      }
     } on Exception catch (e) {
-      debugPrint('TED playlists failed: $e');
+      debugPrint('${c.name} playlists failed: $e');
     } finally {
-      if (mounted) setState(() => _playlistsLoading = false);
+      if (mounted) setState(() => _playlistsLoadingFor.remove(c.id));
     }
   }
 
@@ -110,27 +140,29 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
   void _search() {
     final q = _query.text.trim();
     if (q.isEmpty) return;
-    final feed = TedFeed.search(q);
+    final feed = TedFeed.search(q, channel: _channel);
     setState(() {
       _searches
         ..remove(feed)
         ..insert(0, feed);
-      if (_searches.length > 5) _searches.removeLast();
+      final mine = _searches.where((f) => f.channel.id == _channel.id).toList();
+      if (mine.length > 5) _searches.remove(mine.last);
     });
     _select(feed);
   }
 
   // ---- 영상 목록 ----
 
-  Future<void> _startLatest() async {
-    final cached = await widget.catalog.cached();
+  Future<void> _startLatest(VideoChannel c) async {
+    final latest = TedFeed.latestOf(c);
+    final s = _feeds.putIfAbsent(latest, _FeedState.new);
+    final cached = await widget.catalog.cached(c);
     if (!mounted) return;
-    final s = _feeds.putIfAbsent(TedFeed.latest, _FeedState.new);
     if (cached.isNotEmpty && s.videos.isEmpty) {
       setState(() => s.videos = cached);
       _checkWatched(cached);
     }
-    await _refresh(TedFeed.latest);
+    await _refresh(latest);
   }
 
   void _checkWatched(List<TedVideo> videos) {
@@ -161,7 +193,7 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
       setState(() {
         s.fresh = true;
         s.reachedEnd = page.isLast;
-        if (feed == TedFeed.latest) {
+        if (feed.kind == TedFeedKind.latest) {
           // 최신 영상은 저장해 둔 목록 뒤를 이어 받는다 (캐시는 영상만 이어진 목록)
           s.videos = mergeLatest(page.videos, s.videos);
           s.offset = s.videos.length;
@@ -171,7 +203,9 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
         }
       });
       _checkWatched(s.videos);
-      if (feed == TedFeed.latest) unawaited(widget.catalog.save(s.videos));
+      if (feed.kind == TedFeedKind.latest) {
+        unawaited(widget.catalog.save(s.videos, feed.channel));
+      }
     } on Exception catch (e) {
       if (mounted) setState(() => s.error = '$e');
     } finally {
@@ -198,7 +232,9 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
         s.reachedEnd = page.isLast;
       });
       _checkWatched(s.videos);
-      if (feed == TedFeed.latest) unawaited(widget.catalog.save(s.videos));
+      if (feed.kind == TedFeedKind.latest) {
+        unawaited(widget.catalog.save(s.videos, feed.channel));
+      }
     } on Exception catch (e) {
       if (mounted) setState(() => s.error = '$e');
     } finally {
@@ -258,10 +294,7 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
 
   Widget _header(_FeedState s, {required bool compact}) => Row(
     children: [
-      if (!compact) ...[
-        Text('TED 강연', style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(width: 24),
-      ],
+      if (!compact) ...[_channelPicker(), const SizedBox(width: 24)],
       Expanded(
         child: TextField(
           controller: _query,
@@ -271,8 +304,8 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
           decoration: InputDecoration(
             isDense: true,
             hintText: compact
-                ? 'TED 검색 (영어)'
-                : 'TED 강연 검색 (영어: happiness, leadership …)',
+                ? '${_channel.name} 검색'
+                : '${_channel.name}에서 검색 (영어: happiness, grammar …)',
             prefixIcon: const Icon(Icons.search, size: 20),
             suffixIcon: IconButton(
               tooltip: '검색',
@@ -306,6 +339,33 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
     ],
   );
 
+  /// 채널 고르기 (이름 + 짧은 설명)
+  Widget _channelPicker() => DropdownButton<VideoChannel>(
+    value: _channel,
+    underline: const SizedBox.shrink(),
+    style: Theme.of(context).textTheme.titleLarge,
+    selectedItemBuilder: (_) => [
+      for (final c in VideoChannel.all) Center(child: Text(c.name)),
+    ],
+    items: [
+      for (final c in VideoChannel.all)
+        DropdownMenuItem(
+          value: c,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(c.name, style: Theme.of(context).textTheme.titleSmall),
+              Text(c.about, style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+    ],
+    onChanged: (c) {
+      if (c != null && c.id != _channel.id) _switchChannel(c);
+    },
+  );
+
   Widget _feedTile(TedFeed f, {IconData? icon}) => ListTile(
     dense: true,
     selected: f == _feed,
@@ -321,8 +381,12 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
         : _playlists.where((p) => p.title.toLowerCase().contains(f)).toList();
     return Column(
       children: [
-        _feedTile(TedFeed.latest, icon: Icons.new_releases_outlined),
-        for (final q in _searches) _feedTile(q, icon: Icons.search),
+        _feedTile(
+          TedFeed.latestOf(_channel),
+          icon: Icons.new_releases_outlined,
+        ),
+        for (final q in _searches)
+          if (q.channel.id == _channel.id) _feedTile(q, icon: Icons.search),
         const Divider(height: 1),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),

@@ -1042,7 +1042,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         // TED 목록도 yt-dlp로 받는다 (데스크톱만)
         if (hasDesktopTools)
           IconButton(
-            tooltip: 'TED 강연 (분류·검색)',
+            tooltip: '영어 강연·학습 채널 (TED·BBC·VOA)',
             icon: const Icon(Icons.record_voice_over),
             onPressed: _loading ? null : _openTed,
           ),
