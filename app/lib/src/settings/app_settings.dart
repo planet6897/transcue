@@ -57,6 +57,22 @@ enum WhisperModel {
   static const defaultModel = small;
 }
 
+/// 영어 음성에 쓸 인식 엔진
+enum EnglishStt {
+  whisper('whisper (위에서 고른 모델)'),
+  parakeet('Parakeet (영어에 빠르고 정확 · 처음 한 번 670MB)');
+
+  const EnglishStt(this.label);
+  final String label;
+}
+
+/// NVIDIA Parakeet TDT 0.6B v3 (whisper.cpp의 parakeet-cli로 실행)
+class ParakeetModel {
+  static const file = 'ggml-parakeet-tdt-0.6b-v3-q8_0.bin';
+  static const url =
+      'https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/$file';
+}
+
 /// 앱 설정. 앱 지원 폴더의 settings.json에 저장한다.
 ///
 /// TODO(M3): API 키는 OS 키체인(macOS Keychain / Windows Credential Manager)으로 이동.
@@ -66,6 +82,7 @@ class AppSettings {
     this.claudeApiKey = '',
     this.claudeModel = ClaudeModel.opus,
     WhisperModel? whisperModel,
+    this.englishStt = EnglishStt.whisper,
     this.osApiKey = '',
     this.osUsername = '',
     this.osPassword = '',
@@ -88,6 +105,9 @@ class AppSettings {
   String claudeApiKey;
   ClaudeModel claudeModel;
   WhisperModel whisperModel;
+
+  /// 영어 음성은 Parakeet으로 인식할지 (다른 언어는 항상 whisper)
+  EnglishStt englishStt;
 
   /// OpenSubtitles.com (인터넷 자막 검색). 아이디/비밀번호는 선택.
   String osApiKey;
@@ -122,6 +142,10 @@ class AppSettings {
           (m) => m.name == j['whisperModel'],
           orElse: () => WhisperModel.defaultModel,
         ),
+        englishStt: EnglishStt.values.firstWhere(
+          (m) => m.name == j['englishStt'],
+          orElse: () => EnglishStt.whisper,
+        ),
         osApiKey: j['osApiKey'] as String? ?? '',
         osUsername: j['osUsername'] as String? ?? '',
         osPassword: j['osPassword'] as String? ?? '',
@@ -145,6 +169,7 @@ class AppSettings {
         'claudeApiKey': claudeApiKey.trim(),
         'claudeModel': claudeModel.name,
         'whisperModel': whisperModel.name,
+        'englishStt': englishStt.name,
         'osApiKey': osApiKey.trim(),
         'osUsername': osUsername.trim(),
         'osPassword': osPassword,

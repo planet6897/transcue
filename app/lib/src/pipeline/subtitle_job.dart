@@ -66,6 +66,11 @@ enum JobRefresh {
 String mergeSpokenLang(String? current, String detected) =>
     current == null || current == detected ? detected : 'auto';
 
+/// 재생 위치가 [moved]만큼 바뀌는 동안 [elapsed]가 흘렀을 때, 사용자가 위치를 옮긴 것인지.
+/// 보통 재생(빠르게 재생 포함)·일시정지는 3초 넘게 차이 나지 않는다.
+bool isSeek(Duration moved, Duration elapsed) =>
+    (moved - elapsed).abs() > const Duration(seconds: 3);
+
 class SubtitleJob extends ChangeNotifier {
   SubtitleJob({
     required this.source,
@@ -135,7 +140,8 @@ class SubtitleJob extends ChangeNotifier {
   static const _contextSize = 5;
 
   /// 음성 인식 조각 길이: 처음(또는 이동 직후)은 짧게 해서 자막이 빨리 나오게
-  static const _firstChunkMs = 20000;
+  /// (20초는 인식이 끝날 때까지 자막 없이 영상이 한참 지나간다)
+  static const _firstChunkMs = 10000;
   static const _chunkMs = 30000;
 
   /// 조각 끝에서 문장이 잘리지 않도록 더 읽는 시간
@@ -160,7 +166,33 @@ class SubtitleJob extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _seekWatch?.cancel();
     super.dispose();
+  }
+
+  // ---- 재생 위치 이동 감지 ----
+
+  Timer? _seekWatch;
+
+  /// 음성 인식 중인 조각이 이동에 반응하도록 등록하는 콜백
+  void Function(Duration)? _onSeek;
+
+  /// 사용자가 재생 위치를 옮기면 그 위치부터 인식·번역하도록 알린다
+  void _watchSeek() {
+    var last = playhead();
+    final wall = Stopwatch()..start();
+    _seekWatch = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (_disposed) return;
+      final ph = playhead();
+      final seeked = isSeek(ph - last, wall.elapsed);
+      last = ph;
+      wall.reset();
+      if (!seeked) return;
+      debugPrint('[seek] playhead moved to ${ph.inSeconds}s');
+      _onSeek?.call(ph);
+      // 번역이 이미 돌고 있을 때만 (받은 자막을 음성과 대조하는 중에는 번역하지 않는다)
+      if (_loop != null) _kickTranslation();
+    });
   }
 
   // ---- 캐시 ----
@@ -283,6 +315,7 @@ class SubtitleJob extends ChangeNotifier {
   // ---- 실행 ----
 
   Future<void> run() async {
+    _watchSeek();
     try {
       _set(JobStage.preparing, '자막 준비 중…');
       final cached = refresh == JobRefresh.none && await _loadCache();
@@ -793,6 +826,10 @@ class SubtitleJob extends ChangeNotifier {
     return t < total - 500 ? t : null;
   }
 
+  /// 재생 위치 [ph]에서 인식을 시작할 곳: 말 첫머리가 잘리지 않게 조금 앞
+  static int _sttFrom(Duration ph, int total) =>
+      (ph.inMilliseconds - 1500).clamp(0, total);
+
   int _nextCoveredStart(int after, int total) {
     var n = total;
     for (final (a, _) in _covered) {
@@ -819,6 +856,39 @@ class SubtitleJob extends ChangeNotifier {
   String? _activeChunk;
   final _chunkWatch = Stopwatch();
 
+  // ---- Parakeet (영어) ----
+
+  /// whisper로 언어를 다시 확인하기 전까지 Parakeet으로 인식할 조각 수
+  static const _parakeetRecheck = 5;
+
+  File? _parakeetModel;
+  bool _parakeetStarted = false;
+  double? _parakeetDownload;
+
+  /// parakeet-cli와 모델을 준비한다. 받는 동안에는 whisper로 계속 인식한다.
+  void _prepareParakeet() {
+    if (_parakeetStarted) return;
+    _parakeetStarted = true;
+    () async {
+      try {
+        await parakeetCli(); // 없으면 예외
+        final f = await ensureModelFile(
+          ParakeetModel.file,
+          ParakeetModel.url,
+          onProgress: (p) => _parakeetDownload = p,
+        );
+        _parakeetDownload = null;
+        _parakeetModel = f;
+        debugPrint('[stt] parakeet ready: ${f.path}');
+      } on Exception catch (e) {
+        _parakeetDownload = null;
+        debugPrint('parakeet unavailable: $e');
+        notice = 'Parakeet을 쓸 수 없어 whisper로 인식합니다 ($e)';
+        if (!_disposed) notifyListeners();
+      }
+    }();
+  }
+
   String _sttStatus(double fraction) {
     final t = _translatedCount;
     final active = _activeChunk;
@@ -828,7 +898,11 @@ class SubtitleJob extends ChangeNotifier {
     final trans = settings.hasClaudeKey && sourceLang != 'ko'
         ? ' · 번역 $t줄'
         : '';
-    return '음성 인식 ${(fraction * 100).toStringAsFixed(0)}% · ${cues.length}줄$trans$chunk';
+    final dl = _parakeetDownload;
+    final parakeet = dl == null
+        ? ''
+        : ' · Parakeet 모델 받는 중 ${(dl * 100).toStringAsFixed(0)}%';
+    return '음성 인식 ${(fraction * 100).toStringAsFixed(0)}% · ${cues.length}줄$trans$chunk$parakeet';
   }
 
   /// 음성 인식이 마지막으로 믿은 언어
@@ -849,6 +923,10 @@ class SubtitleJob extends ChangeNotifier {
       ),
     );
     final vad = await ensureVadModel();
+    // 영어로 확인된 구간은 Parakeet으로 (모델은 처음 필요할 때 뒤에서 받는다)
+    final wantParakeet =
+        settings.englishStt == EnglishStt.parakeet && hasDesktopTools;
+    var parakeetRuns = 0;
 
     final (input, headers, duration) = switch (source) {
       LocalFileSource(:final path) => (
@@ -878,8 +956,9 @@ class SubtitleJob extends ChangeNotifier {
       );
       while (!_disposed) {
         // 재생 위치(2초 앞)부터 비어 있는 곳 → 없으면 처음부터 비어 있는 곳
-        final ph = (playhead().inMilliseconds - 2000).clamp(0, total);
-        final start = _firstGap(ph, total) ?? _firstGap(0, total);
+        final start =
+            _firstGap(_sttFrom(playhead(), total), total) ??
+            _firstGap(0, total);
         if (start == null) break;
         final jumped = lastEnd == null || (start - lastEnd).abs() > 1000;
         final stop = _nextCoveredStart(start, total);
@@ -898,12 +977,25 @@ class SubtitleJob extends ChangeNotifier {
         );
         var lastCueEnd = hardEnd;
         var ended = false;
+        // 중단될 때 인식이 끝난 곳 (whisper는 앞에서부터 차례로 내보낸다)
+        var doneUntil = start;
+        if (wantParakeet && _spokenLang == 'en') _prepareParakeet();
+        final parakeet = _parakeetModel;
+        // 영상 안에서 언어가 바뀔 수 있어 몇 조각마다 whisper로 언어를 다시 확인한다
+        final useParakeet =
+            parakeet != null &&
+            _spokenLang == 'en' &&
+            parakeetRuns < _parakeetRecheck;
+        parakeetRuns = useParakeet ? parakeetRuns + 1 : 0;
         _activeChunk =
             '${formatPosition(Duration(milliseconds: start))}'
-            '~${formatPosition(Duration(milliseconds: hardEnd))}';
+            '~${formatPosition(Duration(milliseconds: hardEnd))}'
+            '${useParakeet ? ' (Parakeet)' : ''}';
         _chunkWatch
           ..reset()
           ..start();
+        final finished = Completer<void>();
+        final aborted = Completer<void>();
         final ticker = Timer.periodic(const Duration(seconds: 1), (_) {
           _set(
             JobStage.transcribing,
@@ -911,43 +1003,89 @@ class SubtitleJob extends ChangeNotifier {
             progress,
           );
         });
-        try {
-          await for (final ev in transcribeRange(
-            input: input,
-            httpHeaders: headers,
-            start: Duration(milliseconds: start),
-            length: Duration(milliseconds: readEnd - start),
-            model: model,
-            vadModel: vad,
-            // 영상 안에서 언어가 바뀔 수 있으므로 구간마다 새로 감지한다
-            language: 'auto',
-            fallbackLanguage: _spokenLang,
-            tmp: tmp,
-          )) {
-            switch (ev) {
-              case SttEnd():
-                ended = true;
-              case SttCue(:final cue):
-                final c = shiftCues([cue], Duration(milliseconds: start)).first;
-                final s = c.start.inMilliseconds;
-                // 다음 조각에 속하는 줄, 이미 인식한 구간의 줄은 버린다
-                if (s >= hardEnd || _inCovered(s)) continue;
-                final e = c.end.inMilliseconds;
-                if (e > lastCueEnd) lastCueEnd = e > readEnd ? readEnd : e;
-                _insertCue(c);
-                _kickTranslation(); // 구간이 끝나길 기다리지 않고 바로 번역
-              case SttProgress(:final fraction):
-                final p = (_coveredMs + fraction * (hardEnd - start)) / total;
-                _set(JobStage.transcribing, _sttStatus(p), p);
-              case SttLanguage(:final code):
-                debugPrint('[stt] language $code');
-                _spokenLang = code;
-                sourceLang = mergeSpokenLang(sourceLang, code);
-            }
+        // 재생 위치를 옮겨서 이 조각이 지금 보는 곳과 상관없어졌으면 그만둔다
+        _onSeek = (ph) {
+          if (aborted.isCompleted || finished.isCompleted) return;
+          final target = _firstGap(_sttFrom(ph, total), total);
+          if (target != null && (target < start || target >= hardEnd)) {
+            debugPrint(
+              '[stt] seek to ${ph.inSeconds}s: abort chunk ${start ~/ 1000}s',
+            );
+            aborted.complete();
           }
+        };
+        final sub =
+            transcribeRange(
+              input: input,
+              httpHeaders: headers,
+              start: Duration(milliseconds: start),
+              length: Duration(milliseconds: readEnd - start),
+              model: model,
+              vadModel: vad,
+              // 영상 안에서 언어가 바뀔 수 있으므로 구간마다 새로 감지한다
+              language: 'auto',
+              fallbackLanguage: _spokenLang,
+              tmp: tmp,
+              parakeetModel: useParakeet ? parakeet : null,
+            ).listen(
+              (ev) {
+                switch (ev) {
+                  case SttEnd():
+                    ended = true;
+                  case SttCue(:final cue):
+                    final c = shiftCues([
+                      cue,
+                    ], Duration(milliseconds: start)).first;
+                    final s = c.start.inMilliseconds;
+                    // 다음 조각에 속하는 줄, 이미 인식한 구간의 줄은 버린다
+                    if (s >= hardEnd || _inCovered(s)) return;
+                    final e = c.end.inMilliseconds;
+                    if (e > lastCueEnd) lastCueEnd = e > readEnd ? readEnd : e;
+                    if (e > doneUntil) doneUntil = e > hardEnd ? hardEnd : e;
+                    _insertCue(c);
+                    _kickTranslation(); // 구간이 끝나길 기다리지 않고 바로 번역
+                  case SttProgress(:final fraction):
+                    final p =
+                        (_coveredMs + fraction * (hardEnd - start)) / total;
+                    _set(JobStage.transcribing, _sttStatus(p), p);
+                  case SttLanguage(:final code):
+                    debugPrint('[stt] language $code');
+                    _spokenLang = code;
+                    sourceLang = mergeSpokenLang(sourceLang, code);
+                }
+              },
+              onError: (Object e, StackTrace st) {
+                if (!finished.isCompleted) finished.completeError(e, st);
+              },
+              onDone: () {
+                if (!finished.isCompleted) finished.complete();
+              },
+              cancelOnError: true,
+            );
+        try {
+          await Future.any([finished.future, aborted.future]);
+        } on Exception catch (e) {
+          if (!useParakeet) rethrow;
+          // Parakeet이 실패하면 작업 전체를 멈추지 않고 이 조각부터 whisper로 다시 인식한다
+          // (Parakeet은 끝난 뒤 한꺼번에 내보내므로 이 조각에서 들어온 줄이 없다)
+          debugPrint('[stt] parakeet failed, fallback to whisper: $e');
+          _parakeetModel = null;
+          notice = 'Parakeet 인식에 실패해 whisper로 인식합니다';
+          if (!_disposed) notifyListeners();
+          lastEnd = null;
+          continue;
         } finally {
           ticker.cancel();
+          _onSeek = null;
           _activeChunk = null;
+          if (!finished.isCompleted) await sub.cancel();
+        }
+        if (!finished.isCompleted) {
+          // 옮긴 위치부터 다시. 받은 줄까지는 인식된 것으로 남긴다.
+          _addCovered(start, doneUntil);
+          lastEnd = null;
+          await _saveCache();
+          continue;
         }
         if (ended) {
           // 소리가 끝남. 재생 위치부터 시작했다면 앞부분이 남아 있으므로 계속한다
@@ -984,32 +1122,58 @@ class SubtitleJob extends ChangeNotifier {
   int get _translatedCount =>
       cues.where((c) => c.translation != null && !_wantsTranslation(c)).length;
 
-  List<BilingualCue> _pendingByPriority() {
-    final ph = playhead().inMilliseconds - 5000;
+  /// 번역 요청을 보내 놓고 응답을 기다리는 줄 (두 번역 루프가 같은 줄을 보내지 않게)
+  final _inFlight = <String>{};
+
+  /// 재생 위치 근처로 보는 범위: 지난 5초 ~ 앞으로 1분
+  static const _nearBeforeMs = 5000;
+  static const _nearAheadMs = 60000;
+
+  List<BilingualCue> _pendingByPriority({bool nearOnly = false}) {
+    final now = playhead().inMilliseconds;
+    final ph = now - _nearBeforeMs;
     final p = [
       for (final c in cues)
-        if (_wantsTranslation(c) && !_attempted.contains(_key(c))) c,
+        if (_wantsTranslation(c) &&
+            !_attempted.contains(_key(c)) &&
+            !_inFlight.contains(_key(c)))
+          c,
     ];
-    return [
-      ...p.where((c) => c.end.inMilliseconds >= ph),
-      ...p.where((c) => c.end.inMilliseconds < ph),
-    ];
+    final ahead = p.where((c) => c.end.inMilliseconds >= ph);
+    if (nearOnly) {
+      return [
+        for (final c in ahead)
+          if (c.start.inMilliseconds < now + _nearAheadMs) c,
+      ];
+    }
+    return [...ahead, ...p.where((c) => c.end.inMilliseconds < ph)];
   }
 
   bool get _needsTranslation =>
       sourceLang != 'ko' && _pendingByPriority().isNotEmpty;
 
-  /// 번역 루프가 없으면 시작한다. 음성 인식 조각이 끝날 때마다 불린다.
+  /// 재생 위치 근처만 번역하는 두 번째 루프. 재생 위치를 옮겼을 때 다른 곳을
+  /// 번역하던 요청(최대 30줄)의 응답을 기다리지 않고 지금 보는 곳을 바로 번역한다.
+  Future<void>? _nearLoop;
+
+  /// 번역 루프가 없으면 시작한다. 음성 인식 줄이 생기거나 재생 위치를 옮길 때 불린다.
   void _kickTranslation() {
     kickVocab(); // 학습 단어도 같은 시점에 (켜져 있을 때만)
     if (_dbg('DUALCUE_NO_TRANSLATE')) return;
-    if (_loop != null || !_needsTranslation) return;
+    if (!_needsTranslation) return;
     if (!settings.hasClaudeKey) {
       notice = '설정(⚙)에서 Claude API 키를 등록하면 한국어 번역이 표시됩니다';
       if (!_disposed) notifyListeners();
       return;
     }
-    _loop = _translateLoop().whenComplete(() => _loop = null);
+    if (_loop == null) {
+      _loop = _translateLoop().whenComplete(() => _loop = null);
+    } else if (_nearLoop == null &&
+        _pendingByPriority(nearOnly: true).isNotEmpty) {
+      _nearLoop = _translateLoop(
+        nearOnly: true,
+      ).whenComplete(() => _nearLoop = null);
+    }
   }
 
   /// 한국어가 없는 줄을 모두 번역할 때까지 기다린다.
@@ -1021,7 +1185,7 @@ class SubtitleJob extends ChangeNotifier {
       _kickTranslation();
       final l = _loop;
       if (l == null) break;
-      await l;
+      await Future.wait([l, ?_nearLoop]);
       if (notice != null) break;
       if (_pendingByPriority().isEmpty) break;
     }
@@ -1050,17 +1214,19 @@ class SubtitleJob extends ChangeNotifier {
     await translateRemaining();
   }
 
-  Future<void> _translateLoop() async {
+  Future<void> _translateLoop({bool nearOnly = false}) async {
     final tr = ClaudeTranslator(
       apiKey: settings.claudeApiKey,
       model: settings.claudeModel,
     );
     try {
       while (!_disposed) {
-        final pending = _pendingByPriority();
+        final pending = _pendingByPriority(nearOnly: nearOnly);
         if (pending.isEmpty) return;
         final near = (pending.first.start - playhead()).inSeconds.abs() < 30;
         final batch = pending.take(near ? _nearBatchSize : _batchSize).toList();
+        final keys = batch.map(_key).toList();
+        _inFlight.addAll(keys);
 
         final firstIdx = cues.indexWhere((c) => identical(c, batch.first));
         final req = TranslationBatch(
@@ -1083,7 +1249,12 @@ class SubtitleJob extends ChangeNotifier {
             done / cues.length,
           );
         }
-        final out = await tr.translate(req);
+        final Map<int, String> out;
+        try {
+          out = await tr.translate(req);
+        } finally {
+          _inFlight.removeAll(keys);
+        }
         // 기다리는 동안 음성 인식이 줄을 끼워 넣었을 수 있어 위치가 아니라 내용으로 찾는다
         final byKey = <String, String>{
           for (var i = 0; i < batch.length; i++)

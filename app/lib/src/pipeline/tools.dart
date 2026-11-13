@@ -109,3 +109,7 @@ Future<String> ffprobe() =>
     findTool('ffprobe', install: 'brew install ffmpeg / winget install ffmpeg');
 Future<String> whisperCli() =>
     findTool('whisper-cli', install: whisperInstallHint);
+
+/// whisper.cpp v1.9.2 Windows 배포본에 함께 들어 있는 Parakeet 실행 파일
+Future<String> parakeetCli() =>
+    findTool('parakeet-cli', install: whisperInstallHint);

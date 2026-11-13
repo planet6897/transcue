@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../subtitle/bilingual_cue.dart';
 import 'media_tools.dart';
+import 'parakeet.dart';
 import 'subsync.dart';
 import 'tools.dart';
 import 'whisper.dart';
@@ -27,6 +28,9 @@ Stream<SttEvent> transcribeRange({
   String language = 'auto',
   String? fallbackLanguage,
   required Directory tmp,
+
+  /// 있으면 whisper 대신 Parakeet으로 인식한다 (영어로 확인된 구간, 데스크톱만)
+  File? parakeetModel,
 }) async* {
   if (Platform.isAndroid) {
     yield* _transcribeAndroid(input, start, length, model, vadModel, language);
@@ -42,6 +46,10 @@ Stream<SttEvent> transcribeRange({
   );
   if (await File(wav).length() < 32000) {
     yield SttEnd();
+    return;
+  }
+  if (parakeetModel != null) {
+    yield* transcribeParakeet(wavPath: wav, model: parakeetModel);
     return;
   }
   yield* transcribe(

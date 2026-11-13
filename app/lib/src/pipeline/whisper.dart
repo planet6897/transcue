@@ -254,7 +254,14 @@ Stream<SttEvent> transcribe({
     ],
   ];
   final p = await Process.start(await whisperCli(), args);
-  final events = StreamController<SttEvent>();
+  // 듣는 쪽이 그만두면(재생 위치를 옮김) whisper도 끝낸다. 끝날 때까지 기다려야
+  // 다음 조각이 같은 wav 파일을 덮어쓸 수 있다 (Windows는 열린 파일을 못 덮어씀).
+  final events = StreamController<SttEvent>(
+    onCancel: () async {
+      p.kill();
+      await p.exitCode;
+    },
+  );
   final errTail = <String>[];
   var retry = false;
 
