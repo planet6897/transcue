@@ -5,3 +5,6 @@
 *.ggml
 *.bin
 .env
+
+# 배포 묶음 (scripts/release.ps1)
+/dist/
