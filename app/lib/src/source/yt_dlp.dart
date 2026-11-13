@@ -244,7 +244,8 @@ class YtDlp {
   }
 
   /// 채널·재생목록의 영상 목록(`--flat-playlist`). [start]부터 [end]까지 (1부터, 끝 포함).
-  /// 영상마다 페이지를 열지 않아 30개에 몇 초면 된다. 업로드 날짜는 없다.
+  /// 영상마다 페이지를 열지 않아 30개에 몇 초면 된다.
+  /// 업로드 날짜는 목록의 "3주 전" 같은 표시로 어림한 값(`timestamp`, 하루 단위)이다.
   Future<Map<String, dynamic>> listPlaylist(
     String url, {
     required int start,
@@ -252,6 +253,8 @@ class YtDlp {
   }) async {
     final out = await _run([
       '--flat-playlist',
+      '--extractor-args',
+      'youtubetab:approximate_date',
       '-J',
       '--playlist-start',
       '$start',

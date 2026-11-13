@@ -120,6 +120,93 @@ void main() {
     expect(ids(appendNew([v('a')], [v('c')])), ['a', 'c']);
   });
 
+  group('정렬', () {
+    TedVideo t(String id, {int? views, int? day}) => TedVideo(
+      id: id.padRight(11, '_'),
+      title: id,
+      views: views,
+      uploaded: day == null ? null : DateTime.utc(2026, 1, day),
+    );
+    final list = [
+      t('a', views: 10, day: 5),
+      t('b', views: 300, day: 1),
+      t('c', day: 20), // 조회수 없음
+      t('d', views: 300, day: 9), // b와 조회수 같음
+      t('e', views: 50), // 날짜 없음
+    ];
+
+    test('기본 순서는 받은 순서 그대로', () {
+      expect(ids(sortVideos(list, TedSort.original)), [
+        'a',
+        'b',
+        'c',
+        'd',
+        'e',
+      ]);
+    });
+    test('조회수 높은 순: 같으면 원래 순서, 없으면 뒤로', () {
+      expect(ids(sortVideos(list, TedSort.views)), ['b', 'd', 'e', 'a', 'c']);
+    });
+    test('최근 올라온 순: 날짜 없으면 뒤로', () {
+      expect(ids(sortVideos(list, TedSort.recent)), ['c', 'd', 'a', 'b', 'e']);
+    });
+  });
+
+  group('재생 시간', () {
+    TedVideo len(String id, int? min) => TedVideo(
+      id: id.padRight(11, '_'),
+      title: id,
+      duration: min == null ? null : Duration(minutes: min),
+    );
+    final list = [
+      len('a', 12),
+      len('b', 3),
+      len('c', null),
+      len('d', 5),
+      len('e', 20),
+    ];
+
+    test('짧은 순 / 긴 순 (길이 모르면 뒤로)', () {
+      expect(ids(sortVideos(list, TedSort.shortest)), [
+        'b',
+        'd',
+        'a',
+        'e',
+        'c',
+      ]);
+      expect(ids(sortVideos(list, TedSort.longest)), ['e', 'a', 'd', 'b', 'c']);
+    });
+    test('길이 필터: 경계 5분·15분은 짧은 쪽, 길이 모르면 모든 길이에서만', () {
+      List<String> f(TedLength l) => ids(list.where(l.accepts).toList());
+      expect(f(TedLength.any), ['a', 'b', 'c', 'd', 'e']);
+      expect(f(TedLength.short), ['b', 'd']);
+      expect(f(TedLength.medium), ['a']);
+      expect(f(TedLength.long), ['e']);
+      expect(TedLength.medium.accepts(len('x', 15)), isTrue);
+      expect(TedLength.long.accepts(len('x', 15)), isFalse);
+    });
+  });
+
+  test('formatAgo', () {
+    final now = DateTime.utc(2026, 11, 13, 12);
+    expect(formatAgo(DateTime.utc(2026, 11, 13), now), '오늘');
+    expect(formatAgo(DateTime.utc(2026, 11, 12), now), '어제');
+    expect(formatAgo(DateTime.utc(2026, 11, 9), now), '4일 전');
+    expect(formatAgo(DateTime.utc(2026, 10, 23), now), '3주 전');
+    expect(formatAgo(DateTime.utc(2026, 5, 1), now), '6개월 전');
+    expect(formatAgo(DateTime.utc(2016, 11, 13), now), '10년 전');
+  });
+
+  test('올린 날: yt-dlp timestamp(어림값)를 읽고 캐시에 남긴다', () {
+    final x = TedVideo.fromEntry({
+      'id': 'f5RqYHd2cBQ',
+      'title': 'How Would You Design Your Dream City? | James Rojas | TED',
+      'timestamp': 1794499200,
+    })!;
+    expect(x.uploaded, DateTime.utc(2026, 11, 12, 16)); // 한국 시간 11-13 0시
+    expect(TedVideo.fromJson(x.toJson())!.uploaded, x.uploaded);
+  });
+
   test('formatViews', () {
     expect(formatViews(950), '950');
     expect(formatViews(1200), '1.2천');

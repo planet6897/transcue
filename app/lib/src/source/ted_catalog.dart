@@ -61,6 +61,7 @@ class TedVideo {
     this.speaker,
     this.duration,
     this.views,
+    this.uploaded,
   });
 
   /// YouTube 동영상 ID
@@ -72,6 +73,9 @@ class TedVideo {
   final Duration? duration;
   final int? views;
 
+  /// 올린 날 (목록의 "3주 전" 같은 표시로 어림한 값, 하루 단위)
+  final DateTime? uploaded;
+
   String get thumbnailUrl => 'https://i.ytimg.com/vi/$id/mqdefault.jpg';
 
   /// `yt-dlp --flat-playlist` 항목에서 만든다. 영상이 아니면 null.
@@ -82,12 +86,16 @@ class TedVideo {
     final (title, speaker) = splitTedTitle(raw);
     final d = e['duration'];
     final v = e['view_count'];
+    final t = e['timestamp'];
     return TedVideo(
       id: id,
       title: title,
       speaker: speaker,
       duration: d is num ? Duration(seconds: d.round()) : null,
       views: v is num ? v.toInt() : null,
+      uploaded: t is num
+          ? DateTime.fromMillisecondsSinceEpoch(t.toInt() * 1000, isUtc: true)
+          : null,
     );
   }
 
@@ -97,18 +105,22 @@ class TedVideo {
     if (speaker != null) 'speaker': speaker,
     if (duration != null) 'duration': duration!.inSeconds,
     if (views != null) 'views': views,
+    if (uploaded != null) 'uploaded': uploaded!.millisecondsSinceEpoch ~/ 1000,
   };
 
   static TedVideo? fromJson(Map<String, dynamic> j) {
     final id = j['id'], title = j['title'];
     if (id is! String || title is! String) return null;
-    final d = j['duration'], v = j['views'];
+    final d = j['duration'], v = j['views'], u = j['uploaded'];
     return TedVideo(
       id: id,
       title: title,
       speaker: j['speaker'] as String?,
       duration: d is int ? Duration(seconds: d) : null,
       views: v is int ? v : null,
+      uploaded: u is int
+          ? DateTime.fromMillisecondsSinceEpoch(u * 1000, isUtc: true)
+          : null,
     );
   }
 }
@@ -147,6 +159,77 @@ List<TedVideo> mergeLatest(List<TedVideo> fresh, List<TedVideo> old) {
 List<TedVideo> appendNew(List<TedVideo> list, List<TedVideo> more) {
   final seen = {for (final v in list) v.id};
   return [...list, ...more.where((v) => seen.add(v.id))];
+}
+
+/// 목록 정렬
+enum TedSort {
+  /// 받은 순서 그대로 (최신 강연은 최신순, 검색은 관련도순, 분류는 재생목록 순서)
+  original('기본 순서'),
+  views('조회수 높은 순'),
+  recent('최근 올라온 순'),
+  shortest('짧은 순'),
+  longest('긴 순');
+
+  const TedSort(this.label);
+  final String label;
+}
+
+/// [videos]를 [sort]대로 정렬한 새 목록. 값이 없는 영상은 뒤로, 같으면 원래 순서대로.
+List<TedVideo> sortVideos(List<TedVideo> videos, TedSort sort) {
+  if (sort == TedSort.original) return videos;
+  // 큰 값부터 보여 주므로 짧은 순은 길이에 -를 붙인다
+  int? key(TedVideo v) => switch (sort) {
+    TedSort.views => v.views,
+    TedSort.recent => v.uploaded?.millisecondsSinceEpoch,
+    TedSort.shortest => v.duration == null ? null : -v.duration!.inSeconds,
+    TedSort.longest => v.duration?.inSeconds,
+    TedSort.original => null,
+  };
+  final indexed = [for (var i = 0; i < videos.length; i++) (i, videos[i])];
+  indexed.sort((a, b) {
+    final ka = key(a.$2), kb = key(b.$2);
+    if (ka != kb) {
+      if (ka == null) return 1;
+      if (kb == null) return -1;
+      return kb.compareTo(ka); // 큰 것(많이 본·최근·긴)부터
+    }
+    return a.$1.compareTo(b.$1);
+  });
+  return [for (final (_, v) in indexed) v];
+}
+
+/// 재생 시간으로 거르기
+enum TedLength {
+  any('모든 길이', null, null),
+  short('5분 이하', null, Duration(minutes: 5)),
+  medium('5~15분', Duration(minutes: 5), Duration(minutes: 15)),
+  long('15분 이상', Duration(minutes: 15), null);
+
+  const TedLength(this.label, this.min, this.max);
+  final String label;
+
+  /// [min] 초과 ~ [max] 이하 (경계 5분·15분은 짧은 쪽에 넣는다)
+  final Duration? min;
+  final Duration? max;
+
+  /// 길이를 모르는 영상은 '모든 길이'에서만 보인다
+  bool accepts(TedVideo v) {
+    if (this == any) return true;
+    final d = v.duration;
+    if (d == null) return false;
+    return (min == null || d > min!) && (max == null || d <= max!);
+  }
+}
+
+/// 올린 날을 짧게: 오늘 / 어제 / 3일 전 / 2주 전 / 5개월 전 / 3년 전
+String formatAgo(DateTime uploaded, DateTime now) {
+  final days = now.difference(uploaded).inDays;
+  if (days < 1) return '오늘';
+  if (days < 2) return '어제';
+  if (days < 7) return '$days일 전';
+  if (days < 30) return '${days ~/ 7}주 전';
+  if (days < 365) return '${days ~/ 30}개월 전';
+  return '${days ~/ 365}년 전';
 }
 
 /// 조회수를 짧게: 950 / 1.2천 / 3.4만 / 120만

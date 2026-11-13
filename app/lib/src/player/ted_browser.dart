@@ -38,6 +38,16 @@ class _FeedState {
 
 class _TedBrowserDialogState extends State<TedBrowserDialog> {
   var _feed = TedFeed.latest;
+
+  /// 길이로 거른 영상이 이보다 적으면 다음 페이지를 알아서 불러온다 (최대 [_maxAutoLoad]개까지)
+  static const _minFiltered = 10;
+  static const _maxAutoLoad = 300;
+
+  /// 정렬 (분류를 바꿔도 유지). 불러온 영상 안에서 정렬한다.
+  var _sort = TedSort.original;
+
+  /// 재생 시간 필터 (분류를 바꿔도 유지)
+  var _length = TedLength.any;
   final _feeds = <TedFeed, _FeedState>{};
   var _playlists = <TedFeed>[];
   var _playlistsLoading = false;
@@ -200,6 +210,7 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
     ?v.speaker,
     if (v.duration case final d?) formatPosition(d),
     if (v.views case final n?) '조회수 ${formatViews(n)}',
+    if (v.uploaded case final u?) formatAgo(u, DateTime.now().toUtc()),
     if (_watched.contains(v.id)) '본 영상',
   ].join(' · ');
 
@@ -353,16 +364,85 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
 
   Widget _videoPane(_FeedState s) {
     final theme = Theme.of(context);
+    final videos = sortVideos(s.videos.where(_length.accepts).toList(), _sort);
+    final narrowed = _sort != TedSort.original || _length != TedLength.any;
+    // 길이로 거르면 몇 개 안 남아 스크롤할 수 없으니 알아서 더 불러온다
+    final searching =
+        _length != TedLength.any &&
+        videos.length < _minFiltered &&
+        s.fresh &&
+        !s.reachedEnd &&
+        s.videos.length < _maxAutoLoad;
+    if (searching && !s.loading) {
+      final feed = _feed;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_loadMore(feed));
+      });
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          child: Text(
-            _feed.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.titleSmall,
+          padding: const EdgeInsets.fromLTRB(16, 4, 8, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _feed.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleSmall,
+                ),
+              ),
+              // 정렬은 지금까지 불러온 영상 안에서 한다 (스크롤하면 더 불러와 다시 정렬)
+              if (narrowed && s.videos.isNotEmpty)
+                Text(
+                  _length == TedLength.any
+                      ? '불러온 ${s.videos.length}개 중'
+                      : '불러온 ${s.videos.length}개 중 ${videos.length}개',
+                  style: theme.textTheme.bodySmall,
+                ),
+              const SizedBox(width: 8),
+              Tooltip(
+                message: '재생 시간',
+                child: DropdownButton<TedLength>(
+                  value: _length,
+                  isDense: true,
+                  underline: const SizedBox.shrink(),
+                  icon: const Icon(Icons.timer_outlined, size: 18),
+                  style: theme.textTheme.bodyMedium,
+                  items: [
+                    for (final o in TedLength.values)
+                      DropdownMenuItem(value: o, child: Text(o.label)),
+                  ],
+                  onChanged: (o) {
+                    if (o == null) return;
+                    setState(() => _length = o);
+                    if (_scroll.hasClients) _scroll.jumpTo(0);
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Tooltip(
+                message: '정렬',
+                child: DropdownButton<TedSort>(
+                  value: _sort,
+                  isDense: true,
+                  underline: const SizedBox.shrink(),
+                  icon: const Icon(Icons.sort, size: 18),
+                  style: theme.textTheme.bodyMedium,
+                  items: [
+                    for (final o in TedSort.values)
+                      DropdownMenuItem(value: o, child: Text(o.label)),
+                  ],
+                  onChanged: (o) {
+                    if (o == null) return;
+                    setState(() => _sort = o);
+                    if (_scroll.hasClients) _scroll.jumpTo(0);
+                  },
+                ),
+              ),
+            ],
           ),
         ),
         if (s.error != null)
@@ -376,21 +456,23 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
             ),
           ),
         Expanded(
-          child: s.videos.isEmpty
+          child: videos.isEmpty
               ? Center(
                   child: Text(
-                    s.loading
+                    s.loading || searching
                         ? '목록을 받는 중…'
                         : s.error != null
                         ? ''
+                        : s.videos.isNotEmpty
+                        ? '불러온 ${s.videos.length}개 중 ${_length.label} 영상이 없습니다'
                         : '영상이 없습니다',
                   ),
                 )
               : ListView.builder(
                   controller: _scroll,
-                  itemCount: s.videos.length + 1,
+                  itemCount: videos.length + 1,
                   itemBuilder: (context, i) {
-                    if (i == s.videos.length) {
+                    if (i == videos.length) {
                       return s.loading && s.fresh
                           ? const Padding(
                               padding: EdgeInsets.all(16),
@@ -398,7 +480,7 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
                             )
                           : const SizedBox(height: 16);
                     }
-                    return _videoTile(s.videos[i]);
+                    return _videoTile(videos[i]);
                   },
                 ),
         ),
