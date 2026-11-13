@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../pipeline/tools.dart' show hasDesktopTools;
 import 'app_settings.dart';
 
 /// 설정 화면: Claude API 키, 번역 모델, 음성 인식 모델.
@@ -16,6 +17,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
   late final _key = TextEditingController(text: widget.settings.claudeApiKey);
   late ClaudeModel _claude = widget.settings.claudeModel;
   late WhisperModel _whisper = widget.settings.whisperModel;
+  late EnglishStt _english = widget.settings.englishStt;
   late VocabLevel _level = widget.settings.vocabLevel;
   late final _osKey = TextEditingController(text: widget.settings.osApiKey);
   late final _osUser = TextEditingController(text: widget.settings.osUsername);
@@ -36,6 +38,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       ..claudeApiKey = _key.text.trim()
       ..claudeModel = _claude
       ..whisperModel = _whisper
+      ..englishStt = _english
       ..vocabLevel = _level
       ..osApiKey = _osKey.text.trim()
       ..osUsername = _osUser.text.trim()
@@ -95,8 +98,29 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 ],
                 onChanged: (m) => setState(() => _whisper = m!),
               ),
+              // Parakeet은 데스크톱(whisper.cpp의 parakeet-cli)에서만 실행된다
+              if (hasDesktopTools) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<EnglishStt>(
+                  initialValue: _english,
+                  decoration: const InputDecoration(
+                    labelText: '영어 음성 인식',
+                  ),
+                  items: [
+                    for (final m in EnglishStt.values)
+                      DropdownMenuItem(value: m, child: Text(m.label)),
+                  ],
+                  onChanged: (m) => setState(() => _english = m!),
+                ),
+              ],
               const SizedBox(height: 8),
-              Text('처음 사용할 때 모델을 한 번 내려받습니다.', style: hint),
+              Text(
+                hasDesktopTools
+                    ? '처음 사용할 때 모델을 한 번 내려받습니다. '
+                          'Parakeet은 영어로 확인된 구간에만 쓰고, 다른 언어는 whisper로 인식합니다.'
+                    : '처음 사용할 때 모델을 한 번 내려받습니다.',
+                style: hint,
+              ),
               const SizedBox(height: 20),
               DropdownButtonFormField<VocabLevel>(
                 initialValue: _level,
