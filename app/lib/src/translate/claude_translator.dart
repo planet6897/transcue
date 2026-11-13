@@ -1,159 +1,26 @@
 import 'dart:convert';
-import 'dart:io';
 
 import '../settings/app_settings.dart';
 import '../subtitle/bilingual_cue.dart';
+import 'translator.dart';
 
-class TranslateException implements Exception {
-  const TranslateException(this.message, {this.retryable = false});
-  final String message;
-  final bool retryable;
-  @override
-  String toString() => message;
-}
-
-/// 번역 요청 한 묶음. id는 자막 목록에서의 위치.
-class TranslationBatch {
-  const TranslationBatch({
-    required this.sourceLang,
-    required this.context,
-    required this.items,
-  });
-
-  final String sourceLang;
-
-  /// 직전 자막(원문, 번역) — 문맥·용어 일관성용, 번역하지 않음
-  final List<(String, String?)> context;
-  final Map<int, String> items;
-}
-
-/// 공급자 공통 인터페이스 (OpenAI/Gemini는 M3에서 추가)
-abstract interface class Translator {
-  Future<Map<int, String>> translate(TranslationBatch batch);
-}
-
-const _system = '''
-You translate video subtitles into natural, spoken Korean for Korean learners of the source language.
-Rules:
-- Translate each item independently: exactly one Korean line per input id, never merge or split items.
-- Keep the meaning of the speaker's words; use natural conversational Korean that matches the tone (casual vs. polite) and stays consistent with the context.
-- Keep proper nouns consistent with the context. Keep sound tags like [Music] or (laughs) as short Korean tags, e.g. [음악], (웃음).
-- Output only the JSON object defined by the schema.''';
-
-const _schema = {
-  'type': 'object',
-  'properties': {
-    'translations': {
-      'type': 'array',
-      'items': {
-        'type': 'object',
-        'properties': {
-          'id': {'type': 'integer'},
-          'text': {'type': 'string'},
-        },
-        'required': ['id', 'text'],
-        'additionalProperties': false,
-      },
-    },
-  },
-  'required': ['translations'],
-  'additionalProperties': false,
-};
-
-/// 학습 단어 추출 요청 한 묶음. id는 묶음 안 순번.
-class VocabBatch {
-  const VocabBatch({required this.sourceLang, required this.items});
-  final String sourceLang;
-  final Map<int, String> items;
-}
-
-String _vocabSystem(VocabLevel level) =>
-    '''
-You help a Korean learner study the source language while watching a video.
-The learner's level is ${level.cefr} (${level.description}).
-For each subtitle line, pick 0 to 2 words or short expressions (phrasal verbs, idioms, collocations)
-that this learner is likely not to know and that are worth learning.
-Rules:
-- Skip words the learner surely knows at this level, names of people/places, and sound tags.
-- "text": copy the word or expression exactly as it appears in the line (same spelling and case), so it can be highlighted.
-- "lemma": dictionary form (e.g. "abducted" → "abduct", "picked it up" → "pick up").
-- "pos": Korean part-of-speech abbreviation: 명, 동, 형, 부, 전, 접, 구(phrase/idiom).
-- "meaning": a short Korean meaning that fits THIS line's context, at most 12 characters.
-- Return every input id, with an empty "words" list when nothing is worth learning.
-- Output only the JSON object defined by the schema.''';
-
-const _vocabSchema = {
-  'type': 'object',
-  'properties': {
-    'items': {
-      'type': 'array',
-      'items': {
-        'type': 'object',
-        'properties': {
-          'id': {'type': 'integer'},
-          'words': {
-            'type': 'array',
-            'items': {
-              'type': 'object',
-              'properties': {
-                'text': {'type': 'string'},
-                'lemma': {'type': 'string'},
-                'pos': {'type': 'string'},
-                'meaning': {'type': 'string'},
-              },
-              'required': ['text', 'lemma', 'pos', 'meaning'],
-              'additionalProperties': false,
-            },
-          },
-        },
-        'required': ['id', 'words'],
-        'additionalProperties': false,
-      },
-    },
-  },
-  'required': ['items'],
-  'additionalProperties': false,
-};
+export 'translator.dart';
 
 /// Claude Messages API (REST — Dart용 공식 SDK가 없어 직접 호출)
-class ClaudeTranslator implements Translator {
+class ClaudeTranslator extends LlmTranslator {
   ClaudeTranslator({required this.apiKey, required this.model});
 
   final String apiKey;
   final ClaudeModel model;
 
-  static final _endpoint = Uri.parse('https://api.anthropic.com/v1/messages');
+  @override
+  String get providerName => 'Claude';
 
-  /// 요청 본문 (테스트용으로 분리)
-  Map<String, Object?> buildBody(TranslationBatch b) {
-    final payload = {
-      'source_language': b.sourceLang,
-      'target_language': 'ko',
-      'context': [
-        for (final (o, t) in b.context) {'original': o, 'korean': ?t},
-      ],
-      'items': [
-        for (final e in b.items.entries) {'id': e.key, 'text': e.value},
-      ],
-    };
-    return {
-      'model': model.id,
-      'max_tokens': 16000,
-      'system': _system,
-      'messages': [
-        {'role': 'user', 'content': jsonEncode(payload)},
-      ],
-      'output_config': {
-        // 자막 번역은 단순 작업이라 낮은 effort로 비용/지연을 줄인다
-        'effort': 'low',
-        'format': {'type': 'json_schema', 'schema': _schema},
-      },
-      // 안전 분류기 거절 시 서버가 다른 모델로 재시도 (Opus/Sonnet만 지원)
-      if (model != ClaudeModel.haiku) 'fallbacks': 'default',
-    };
-  }
+  @override
+  final Uri endpoint = Uri.parse('https://api.anthropic.com/v1/messages');
 
-  Map<String, Object?> _envelope(
+  @override
+  Map<String, Object?> envelope(
     String system,
     Map<String, Object?> schema,
     Object payload,
@@ -165,21 +32,15 @@ class ClaudeTranslator implements Translator {
       {'role': 'user', 'content': jsonEncode(payload)},
     ],
     'output_config': {
+      // 자막 번역은 단순 작업이라 낮은 effort로 비용/지연을 줄인다
       'effort': 'low',
       'format': {'type': 'json_schema', 'schema': schema},
     },
+    // 안전 분류기 거절 시 서버가 다른 모델로 재시도 (Opus/Sonnet만 지원)
     if (model != ClaudeModel.haiku) 'fallbacks': 'default',
   };
 
-  /// 학습 단어 요청 본문 (테스트용으로 분리)
-  Map<String, Object?> buildVocabBody(VocabBatch b, VocabLevel level) =>
-      _envelope(_vocabSystem(level), _vocabSchema, {
-        'source_language': b.sourceLang,
-        'items': [
-          for (final e in b.items.entries) {'id': e.key, 'text': e.value},
-        ],
-      });
-
+  @override
   Map<String, String> get headers => {
     'content-type': 'application/json',
     'x-api-key': apiKey,
@@ -189,38 +50,18 @@ class ClaudeTranslator implements Translator {
   };
 
   /// 응답 해석 (테스트용으로 분리)
-  static Map<int, String> parseResponse(Map<String, dynamic> j) {
-    final out = _jsonOf(j);
-    return {
-      for (final t in (out['translations'] as List).cast<Map>())
-        (t['id'] as num).toInt(): (t['text'] as String).trim(),
-    };
-  }
+  static Map<int, String> parseResponse(Map<String, dynamic> j) =>
+      translationsOf(_jsonOf(j));
 
   /// 학습 단어 응답 해석. 자막에 실제로 없는 표현은 버린다 (강조 표시 불가).
   static Map<int, List<VocabItem>> parseVocabResponse(
     Map<String, dynamic> j,
     Map<int, String> lines,
-  ) {
-    final out = _jsonOf(j);
-    final result = <int, List<VocabItem>>{};
-    for (final it in (out['items'] as List).cast<Map>()) {
-      final id = (it['id'] as num).toInt();
-      final line = (lines[id] ?? '').toLowerCase();
-      result[id] = [
-        for (final w in (it['words'] as List).cast<Map>())
-          if ('${w['text']}'.trim().isNotEmpty &&
-              line.contains('${w['text']}'.trim().toLowerCase()))
-            VocabItem(
-              text: '${w['text']}'.trim(),
-              lemma: '${w['lemma']}'.trim(),
-              pos: '${w['pos']}'.trim(),
-              meaning: '${w['meaning']}'.trim(),
-            ),
-      ].take(2).toList();
-    }
-    return result;
-  }
+  ) => vocabOf(_jsonOf(j), lines);
+
+  @override
+  Map<String, dynamic> outputJson(Map<String, dynamic> response) =>
+      _jsonOf(response);
 
   static Map<String, dynamic> _jsonOf(Map<String, dynamic> j) {
     final stop = j['stop_reason'];
@@ -235,69 +76,6 @@ class ClaudeTranslator implements Translator {
         .where((c) => c['type'] == 'text')
         .map((c) => c['text'] as String)
         .join();
-    try {
-      return jsonDecode(text) as Map<String, dynamic>;
-    } on FormatException {
-      throw const TranslateException('응답 형식 오류', retryable: true);
-    }
-  }
-
-  @override
-  Future<Map<int, String>> translate(TranslationBatch batch) =>
-      _request(jsonEncode(buildBody(batch)), parseResponse);
-
-  /// 학습 단어 추출 (줄 id → 단어 0~2개)
-  Future<Map<int, List<VocabItem>>> extractVocab(
-    VocabBatch batch,
-    VocabLevel level,
-  ) => _request(
-    jsonEncode(buildVocabBody(batch, level)),
-    (j) => parseVocabResponse(j, batch.items),
-  );
-
-  Future<T> _request<T>(
-    String body,
-    T Function(Map<String, dynamic>) parse,
-  ) async {
-    for (var attempt = 0; ; attempt++) {
-      try {
-        return parse(await _post(body));
-      } on TranslateException catch (e) {
-        if (!e.retryable || attempt >= 4) rethrow;
-        await Future<void>.delayed(Duration(seconds: 2 << attempt));
-      } on IOException {
-        if (attempt >= 4) rethrow;
-        await Future<void>.delayed(Duration(seconds: 2 << attempt));
-      }
-    }
-  }
-
-  Future<Map<String, dynamic>> _post(String body) async {
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 30);
-    try {
-      final req = await client.postUrl(_endpoint);
-      headers.forEach(req.headers.set);
-      req.add(utf8.encode(body));
-      final res = await req.close().timeout(const Duration(minutes: 5));
-      final text = await res.transform(utf8.decoder).join();
-      final code = res.statusCode;
-      if (code == 200) return jsonDecode(text) as Map<String, dynamic>;
-      String msg = text;
-      try {
-        msg = (jsonDecode(text) as Map)['error']['message'] as String;
-      } catch (_) {}
-      if (code == 401) {
-        throw const TranslateException('Claude API 키가 올바르지 않습니다 (설정 확인)');
-      }
-      if (code == 402 || code == 403) {
-        throw TranslateException('Claude API 사용 불가 ($code): $msg');
-      }
-      // 429 요청 제한, 5xx/529 서버 과부하 → 재시도
-      final retry = code == 429 || code >= 500;
-      throw TranslateException('Claude API 오류 $code: $msg', retryable: retry);
-    } finally {
-      client.close();
-    }
+    return decodeModelJson(text);
   }
 }

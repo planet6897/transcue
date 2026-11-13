@@ -15,6 +15,54 @@ enum ClaudeModel {
   final String costHint;
 }
 
+/// 번역에 쓸 OpenAI 모델. 가격은 100만 토큰당 (2026-11 기준).
+enum OpenAiModel {
+  luna('gpt-6-luna', 'GPT-6 Luna', '가장 저렴 · 입력 \$0.1 / 출력 \$0.5'),
+  terra('gpt-6.1-terra', 'GPT-6.1 Terra', '빠름 · 입력 \$1 / 출력 \$5'),
+  sol('gpt-6.1-sol', 'GPT-6.1 Sol', '균형 · 입력 \$2 / 출력 \$10'),
+  astra('gpt-6-astra', 'GPT-6 Astra', '최고 품질 · 입력 \$10 / 출력 \$50');
+
+  const OpenAiModel(this.id, this.label, this.costHint);
+  final String id;
+  final String label;
+  final String costHint;
+}
+
+/// 번역에 쓸 Gemini 모델. 가격은 100만 토큰당 (2026-11 기준).
+enum GeminiModel {
+  flashLite(
+    'gemini-3.5-flash-lite',
+    'Gemini 3.5 Flash-Lite',
+    '가장 저렴 · 입력 \$0.3 / 출력 \$2.5',
+  ),
+  hydrogen(
+    'gemini-4-hydrogen',
+    'Gemini 4 Hydrogen',
+    '균형 · 입력 \$1.5 / 출력 \$7.5',
+  ),
+  argon('gemini-4-argon', 'Gemini 4 Argon', '고품질 · 입력 \$4 / 출력 \$20'),
+  carbon('gemini-4-carbon', 'Gemini 4 Carbon', '최고 품질 · 입력 \$4 / 출력 \$20');
+
+  const GeminiModel(this.id, this.label, this.costHint);
+  final String id;
+  final String label;
+  final String costHint;
+}
+
+/// 번역 공급자
+enum TranslateProvider {
+  claude('Claude', 'sk-ant-...', 'console.anthropic.com'),
+  openai('OpenAI', 'sk-...', 'platform.openai.com'),
+  gemini('Gemini', 'AIza...', 'aistudio.google.com');
+
+  const TranslateProvider(this.label, this.keyHint, this.keySite);
+  final String label;
+  final String keyHint;
+
+  /// API 키를 발급받는 곳
+  final String keySite;
+}
+
 /// 학습 단어 수준: 이 수준에서 모를 만한 단어를 고른다
 enum VocabLevel {
   beginner('초급', 'A2', 'knows only basic everyday words'),
@@ -81,6 +129,11 @@ class AppSettings {
   AppSettings({
     this.claudeApiKey = '',
     this.claudeModel = ClaudeModel.opus,
+    this.provider = TranslateProvider.claude,
+    this.openaiApiKey = '',
+    this.openaiModel = OpenAiModel.sol,
+    this.geminiApiKey = '',
+    this.geminiModel = GeminiModel.hydrogen,
     WhisperModel? whisperModel,
     this.englishStt = EnglishStt.whisper,
     this.osApiKey = '',
@@ -98,12 +151,19 @@ class AppSettings {
   /// 연속 재생: 영상이 끝나면 같은 폴더의 다음 영상을 연다
   bool autoPlayNext;
 
-  /// 학습 단어 표시 (켜져 있을 때만 단어를 만든다 — Claude 비용)
+  /// 학습 단어 표시 (켜져 있을 때만 단어를 만든다 — 번역 API 비용)
   bool showVocab;
   VocabLevel vocabLevel;
 
   String claudeApiKey;
   ClaudeModel claudeModel;
+
+  /// 번역·학습 단어에 쓸 공급자. 키와 모델은 공급자마다 따로 기억한다.
+  TranslateProvider provider;
+  String openaiApiKey;
+  OpenAiModel openaiModel;
+  String geminiApiKey;
+  GeminiModel geminiModel;
   WhisperModel whisperModel;
 
   /// 영어 음성은 Parakeet으로 인식할지 (다른 언어는 항상 whisper)
@@ -116,7 +176,22 @@ class AppSettings {
 
   bool get hasOpenSubtitles => osApiKey.trim().isNotEmpty;
 
-  bool get hasClaudeKey => claudeApiKey.trim().isNotEmpty;
+  /// 고른 공급자의 API 키
+  String get translateApiKey => switch (provider) {
+    TranslateProvider.claude => claudeApiKey,
+    TranslateProvider.openai => openaiApiKey,
+    TranslateProvider.gemini => geminiApiKey,
+  };
+
+  /// 고른 공급자의 API 키가 있는지 (번역·학습 단어를 쓸 수 있는지)
+  bool get hasTranslateKey => translateApiKey.trim().isNotEmpty;
+
+  /// 고른 공급자의 모델 이름
+  String get translateModelLabel => switch (provider) {
+    TranslateProvider.claude => claudeModel.label,
+    TranslateProvider.openai => openaiModel.label,
+    TranslateProvider.gemini => geminiModel.label,
+  };
 
   static Future<Directory> supportDir() async {
     final d = await getApplicationSupportDirectory();
@@ -137,6 +212,20 @@ class AppSettings {
         claudeModel: ClaudeModel.values.firstWhere(
           (m) => m.name == j['claudeModel'],
           orElse: () => ClaudeModel.opus,
+        ),
+        provider: TranslateProvider.values.firstWhere(
+          (m) => m.name == j['provider'],
+          orElse: () => TranslateProvider.claude,
+        ),
+        openaiApiKey: j['openaiApiKey'] as String? ?? '',
+        openaiModel: OpenAiModel.values.firstWhere(
+          (m) => m.name == j['openaiModel'],
+          orElse: () => OpenAiModel.sol,
+        ),
+        geminiApiKey: j['geminiApiKey'] as String? ?? '',
+        geminiModel: GeminiModel.values.firstWhere(
+          (m) => m.name == j['geminiModel'],
+          orElse: () => GeminiModel.hydrogen,
         ),
         whisperModel: WhisperModel.values.firstWhere(
           (m) => m.name == j['whisperModel'],
@@ -168,6 +257,11 @@ class AppSettings {
       jsonEncode({
         'claudeApiKey': claudeApiKey.trim(),
         'claudeModel': claudeModel.name,
+        'provider': provider.name,
+        'openaiApiKey': openaiApiKey.trim(),
+        'openaiModel': openaiModel.name,
+        'geminiApiKey': geminiApiKey.trim(),
+        'geminiModel': geminiModel.name,
         'whisperModel': whisperModel.name,
         'englishStt': englishStt.name,
         'osApiKey': osApiKey.trim(),

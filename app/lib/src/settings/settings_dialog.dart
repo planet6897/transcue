@@ -4,7 +4,7 @@ import '../app_version.dart';
 import '../pipeline/stt_engine.dart' show canUseParakeet;
 import 'app_settings.dart';
 
-/// 설정 화면: Claude API 키, 번역 모델, 음성 인식 모델.
+/// 설정 화면: 번역 공급자·API 키·모델, 음성 인식 모델.
 class SettingsDialog extends StatefulWidget {
   const SettingsDialog({super.key, required this.settings});
 
@@ -15,8 +15,22 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  late final _key = TextEditingController(text: widget.settings.claudeApiKey);
+  late TranslateProvider _provider = widget.settings.provider;
+  // 공급자를 바꿔도 넣어 둔 키가 남도록 공급자마다 입력란을 따로 둔다
+  late final _keys = {
+    TranslateProvider.claude: TextEditingController(
+      text: widget.settings.claudeApiKey,
+    ),
+    TranslateProvider.openai: TextEditingController(
+      text: widget.settings.openaiApiKey,
+    ),
+    TranslateProvider.gemini: TextEditingController(
+      text: widget.settings.geminiApiKey,
+    ),
+  };
   late ClaudeModel _claude = widget.settings.claudeModel;
+  late OpenAiModel _openai = widget.settings.openaiModel;
+  late GeminiModel _gemini = widget.settings.geminiModel;
   late WhisperModel _whisper = widget.settings.whisperModel;
   late EnglishStt _english = widget.settings.englishStt;
   late VocabLevel _level = widget.settings.vocabLevel;
@@ -27,7 +41,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   @override
   void dispose() {
-    _key.dispose();
+    for (final c in _keys.values) {
+      c.dispose();
+    }
     _osKey.dispose();
     _osUser.dispose();
     _osPass.dispose();
@@ -36,8 +52,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   void _save() {
     widget.settings
-      ..claudeApiKey = _key.text.trim()
+      ..provider = _provider
+      ..claudeApiKey = _keys[TranslateProvider.claude]!.text.trim()
       ..claudeModel = _claude
+      ..openaiApiKey = _keys[TranslateProvider.openai]!.text.trim()
+      ..openaiModel = _openai
+      ..geminiApiKey = _keys[TranslateProvider.gemini]!.text.trim()
+      ..geminiModel = _gemini
       ..whisperModel = _whisper
       ..englishStt = _english
       ..vocabLevel = _level
@@ -46,6 +67,48 @@ class _SettingsDialogState extends State<SettingsDialog> {
       ..osPassword = _osPass.text;
     Navigator.pop(context, true);
   }
+
+  DropdownButtonFormField<T> _modelField<T>(
+    T value,
+    List<T> values,
+    String Function(T) text,
+    ValueChanged<T> onChanged,
+  ) => DropdownButtonFormField<T>(
+    // 공급자를 바꾸면 모델 목록의 종류가 달라지므로 새로 만든다
+    key: ValueKey('model-${_provider.name}'),
+    initialValue: value,
+    isExpanded: true,
+    decoration: const InputDecoration(labelText: '번역 모델'),
+    items: [
+      for (final m in values)
+        DropdownMenuItem(
+          value: m,
+          child: Text(text(m), overflow: TextOverflow.ellipsis),
+        ),
+    ],
+    onChanged: (m) => setState(() => onChanged(m as T)),
+  );
+
+  Widget _translateModel() => switch (_provider) {
+    TranslateProvider.claude => _modelField(
+      _claude,
+      ClaudeModel.values,
+      (m) => '${m.label}  —  ${m.costHint}',
+      (m) => _claude = m,
+    ),
+    TranslateProvider.openai => _modelField(
+      _openai,
+      OpenAiModel.values,
+      (m) => '${m.label}  —  ${m.costHint}',
+      (m) => _openai = m,
+    ),
+    TranslateProvider.gemini => _modelField(
+      _gemini,
+      GeminiModel.values,
+      (m) => '${m.label}  —  ${m.costHint}',
+      (m) => _gemini = m,
+    ),
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -68,13 +131,24 @@ class _SettingsDialogState extends State<SettingsDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              DropdownButtonFormField<TranslateProvider>(
+                initialValue: _provider,
+                decoration: const InputDecoration(labelText: '번역 공급자'),
+                items: [
+                  for (final p in TranslateProvider.values)
+                    DropdownMenuItem(value: p, child: Text(p.label)),
+                ],
+                onChanged: (p) => setState(() => _provider = p!),
+              ),
+              const SizedBox(height: 12),
               TextField(
-                controller: _key,
+                key: ValueKey('key-${_provider.name}'),
+                controller: _keys[_provider],
                 obscureText: _obscure,
                 decoration: InputDecoration(
-                  labelText: 'Claude API 키',
-                  hintText: 'sk-ant-...',
-                  helperText: 'console.anthropic.com 에서 발급 · 번역에만 사용',
+                  labelText: '${_provider.label} API 키',
+                  hintText: _provider.keyHint,
+                  helperText: '${_provider.keySite} 에서 발급 · 번역·학습 단어에만 사용',
                   suffixIcon: IconButton(
                     icon: Icon(
                       _obscure ? Icons.visibility : Icons.visibility_off,
@@ -84,18 +158,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 ),
               ),
               const SizedBox(height: 20),
-              DropdownButtonFormField<ClaudeModel>(
-                initialValue: _claude,
-                decoration: const InputDecoration(labelText: '번역 모델'),
-                items: [
-                  for (final m in ClaudeModel.values)
-                    DropdownMenuItem(
-                      value: m,
-                      child: Text('${m.label}  —  ${m.costHint}'),
-                    ),
-                ],
-                onChanged: (m) => setState(() => _claude = m!),
-              ),
+              _translateModel(),
               const SizedBox(height: 20),
               DropdownButtonFormField<WhisperModel>(
                 initialValue: _whisper,
