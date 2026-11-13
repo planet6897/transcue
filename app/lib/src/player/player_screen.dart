@@ -4,6 +4,7 @@ import 'dart:ui' show AppExitResponse;
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -24,6 +25,7 @@ import 'play_counts.dart';
 import 'playlist.dart';
 import 'recent_videos.dart';
 import 'resume.dart';
+import 'sentence_loop.dart';
 import 'ted_browser.dart';
 import 'volume_gesture.dart';
 
@@ -84,6 +86,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 전체 화면에서 보여 줄 안내 (SnackBar는 전체 화면 뒤에 가려진다)
   final _flash = ValueNotifier<String?>(null);
   final _centerHint = ValueNotifier<Widget?>(null); // 화살표 키 조작 표시
+
+  /// 데스크톱 화면 밝기 (영상을 덮어 어둡게 한다, 1 = 원래 밝기). 앱을 다시 열면 돌아온다.
+  final _screenBrightness = ValueNotifier<double>(1);
   Timer? _flashTimer;
 
   @override
@@ -101,6 +106,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   String? _resumeKey;
   Timer? _positionTimer;
   StreamSubscription<bool>? _playingSub;
+
+  /// 문장 반복 (켜져 있을 때만 있다). 횟수는 끄고 다시 켜도 기억한다.
+  SentenceLoop? _sentenceLoop;
+  var _sentenceRepeat = SentenceRepeat.forever;
+  StreamSubscription<Duration>? _sentenceLoopSub;
 
   /// 지금 영상의 반복 재생 상태와 재생 횟수 (화면 표시용)
   final _playInfo = ValueNotifier<({bool repeat, int count})>((
@@ -175,6 +185,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void dispose() {
     _completedSub?.cancel();
+    _sentenceLoopSub?.cancel();
     _playingSub?.cancel();
     _positionTimer?.cancel();
     unawaited(_rememberPosition());
@@ -187,6 +198,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _flash.dispose();
     _centerHintTimer?.cancel();
     _centerHint.dispose();
+    _screenBrightness.dispose();
     if (!_playerClosed) {
       _playerClosed = true;
       _player.dispose();
@@ -574,6 +586,124 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// PopupMenuButton은 메뉴가 떠 있는 사이 조작부가 자동으로 사라져 버튼이 없어지면
   /// 고른 항목을 버린다. 그래서 메뉴를 직접 띄워 결과를 받는다.
+  // ---- 문장 반복 ----
+
+  /// 문장 반복 켜기/끄기 (L)
+  void _toggleSentenceLoop() =>
+      _setSentenceLoop(_sentenceLoop == null ? _sentenceRepeat : null);
+
+  /// [repeat]으로 문장 반복을 켠다. null이면 끈다.
+  void _setSentenceLoop(SentenceRepeat? repeat) {
+    if (repeat == null) {
+      _sentenceLoopSub?.cancel();
+      _sentenceLoopSub = null;
+      setState(() => _sentenceLoop = null);
+      _toast('문장 반복 꺼짐 (L)');
+      return;
+    }
+    _sentenceRepeat = repeat;
+    final loop = _sentenceLoop;
+    if (loop != null) {
+      setState(() => loop.repeat = repeat);
+    } else {
+      final created = SentenceLoop(repeat)
+        ..lockAt(_view.cues, _player.state.position);
+      setState(() => _sentenceLoop = created);
+      _sentenceLoopSub = _player.stream.position.listen(_onLoopPosition);
+    }
+    _toast(
+      _view.cues.isEmpty
+          ? '문장 반복 켜짐 · ${repeat.label} (자막이 생기면 반복합니다)'
+          : '문장 반복 켜짐 · ${repeat.label} (L)',
+    );
+  }
+
+  void _onLoopPosition(Duration pos) {
+    final loop = _sentenceLoop;
+    if (loop == null) return;
+    final before = (loop.cue, loop.round);
+    final back = loop.onPosition(_view.cues, pos);
+    if (back != null) {
+      if (kDebugMode) {
+        debugPrint(
+          '[loop] ${pos.inMilliseconds}ms -> ${back.inMilliseconds}ms '
+          'round ${loop.round} "${loop.cue?.original}"',
+        );
+      }
+      unawaited(_player.seek(back));
+    }
+    // 몇 번째 듣는지 버튼에 보여 준다 (바뀔 때만 다시 그린다)
+    if (before != (loop.cue, loop.round) && mounted) setState(() {});
+  }
+
+  /// 문장 반복 버튼: 횟수를 고르거나 끈다
+  Future<void> _showSentenceLoopMenu(BuildContext button) async {
+    final box = button.findRenderObject()! as RenderBox;
+    final overlay =
+        Navigator.of(button).overlay!.context.findRenderObject()! as RenderBox;
+    final on = _sentenceLoop?.repeat;
+    final picked = await showMenu<SentenceRepeat?>(
+      context: button,
+      position: RelativeRect.fromRect(
+        box.localToGlobal(Offset.zero, ancestor: overlay) & box.size,
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        for (final r in SentenceRepeat.values)
+          CheckedPopupMenuItem(
+            value: r,
+            checked: on == r,
+            child: Text(r.label),
+          ),
+        if (on != null) ...[
+          const PopupMenuDivider(),
+          PopupMenuItem(
+            value: null,
+            onTap: () => _menuPickedOff = true,
+            child: const Text('끄기'),
+          ),
+        ],
+      ],
+    );
+    // 메뉴 밖을 눌러 닫으면 picked도 null이므로, 끄기는 켜져 있을 때 고른 경우만
+    if (!mounted) return;
+    if (picked != null) {
+      _setSentenceLoop(picked);
+    } else if (on != null && _menuPickedOff) {
+      _setSentenceLoop(null);
+    }
+    _menuPickedOff = false;
+  }
+
+  /// '끄기'를 골랐는지 (메뉴 밖을 눌러 닫은 것과 구별)
+  var _menuPickedOff = false;
+
+  Widget _sentenceLoopButton() {
+    final loop = _sentenceLoop;
+    final times = loop?.repeat.times;
+    final tip = loop == null
+        ? '문장 반복 꺼짐 (L)'
+        : '문장 반복 켜짐 · ${loop.repeat.label} (L)';
+    final icon = Icon(
+      Icons.loop,
+      color: loop == null ? null : const Color(0xFF80DEEA),
+    );
+    return Builder(
+      builder: (button) => IconButton(
+        tooltip: tip,
+        icon: loop == null || loop.cue == null
+            ? icon
+            : Badge(
+                label: Text(
+                  times == 0 ? '${loop.round}' : '${loop.round}/$times',
+                ),
+                child: icon,
+              ),
+        onPressed: () => _showSentenceLoopMenu(button),
+      ),
+    );
+  }
+
   Future<void> _showRegenMenu(BuildContext button) async {
     final box = button.findRenderObject()! as RenderBox;
     final overlay =
@@ -717,6 +847,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _nudge(const Duration(milliseconds: 200)),
     const SingleActivator(LogicalKeyboardKey.keyV): _toggleVocab,
     const SingleActivator(LogicalKeyboardKey.keyR): _toggleRepeat,
+    const SingleActivator(LogicalKeyboardKey.keyL): _toggleSentenceLoop,
     const SingleActivator(LogicalKeyboardKey.keyR, shift: true): _resetCount,
     // 처음부터
     const SingleActivator(LogicalKeyboardKey.home): () =>
@@ -769,6 +900,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
+  /// 영상 위에서 휠: 오른쪽 절반은 소리, 왼쪽 절반은 밝기 (Android 위/아래 밀기와 같은 배치)
+  void _onWheel(PointerSignalEvent e, double width) {
+    if (e is! PointerScrollEvent) return;
+    final step = wheelStep(e.scrollDelta);
+    if (step == 0) return;
+    // 같은 휠 입력을 다른 곳(목록 스크롤 등)과 나눠 처리하지 않게 한 곳만 받는다
+    GestureBinding.instance.pointerSignalResolver.register(e, (_) {
+      if (e.localPosition.dx < width / 2) {
+        _changeBrightness(step * brightnessStep);
+      } else {
+        _changeVolume(step * volumeKeyStep);
+      }
+    });
+  }
+
+  /// 화면 밝기를 바꾸고 화면 가운데에 잠깐 보여 준다 (데스크톱)
+  void _changeBrightness(double delta) {
+    final b = steppedBrightness(_screenBrightness.value, delta);
+    _screenBrightness.value = b;
+    _showCenterHint(VolumeIndicator(value: b, brightness: true));
+  }
+
   /// 음량을 바꾸고 화면 가운데에 잠깐 보여 준다
   void _changeVolume(double delta) {
     // 키를 누르고 있으면 플레이어 값이 갱신되기 전에 다음 입력이 오므로 직전 목표값을 기준으로 한다
@@ -803,6 +956,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
     _sentenceTarget = target;
     _sentenceSeekAt = now;
+    // 문장 반복 중이면 옮긴 문장을 처음부터 반복한다
+    _sentenceLoop?.lockAt(_view.cues, target);
     _player.seek(target);
     return true;
   }
@@ -843,6 +998,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late final _controlsTheme = MaterialDesktopVideoControlsThemeData(
     playAndPauseOnTap: false,
     toggleFullscreenOnDoublePress: false,
+    // 휠은 [_onWheel]이 처리한다 (오른쪽은 소리·왼쪽은 밝기, 가운데 표시)
+    modifyVolumeOnScroll: false,
     visibleOnMount: _pinControls,
     controlsHoverDuration: _pinControls
         ? const Duration(hours: 1)
@@ -950,6 +1107,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
       Platform.isIOS ||
       (kDebugMode && Platform.environment['DUALCUE_TOUCH'] == '1');
 
+  /// 화면 밝기를 낮췄을 때 영상을 덮는 검은 막 (전체 화면에서도 바뀌도록 알림을 구독)
+  Widget _dimLayer() => ValueListenableBuilder<double>(
+    valueListenable: _screenBrightness,
+    builder: (_, b, _) => b >= 1
+        ? const SizedBox.shrink()
+        : IgnorePointer(
+            child: ColoredBox(
+              color: Colors.black.withValues(alpha: 1 - b),
+              child: const SizedBox.expand(),
+            ),
+          ),
+  );
+
   /// 상단 메뉴 묶음 사이 구분선
   static const _menuDivider = SizedBox(
     height: 24,
@@ -1011,6 +1181,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           onPressed: _toggleRepeat,
         ),
+        _sentenceLoopButton(),
         IconButton(
           tooltip: '이전 영상 (P)',
           icon: const Icon(Icons.skip_previous),
@@ -1186,6 +1357,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       // controls 빌더는 전체 화면에서도 다시 쓰이므로 자막을 여기에 넣는다
                       controls: (state) => Stack(
                         children: [
+                          // 화면 밝기 (데스크톱): 영상만 어둡게. 자막·조작부는 이 위에 그린다
+                          if (!_touch) _dimLayer(),
                           if (_touch)
                             MaterialVideoControls(state)
                           else
@@ -1200,9 +1373,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
                               left: 0,
                               right: 0,
                               bottom: 84,
-                              child: GestureDetector(
-                                behavior: HitTestBehavior.translucent,
-                                onTap: _onVideoClick,
+                              child: LayoutBuilder(
+                                builder: (context, box) => Listener(
+                                  behavior: HitTestBehavior.translucent,
+                                  onPointerSignal: (e) =>
+                                      _onWheel(e, box.maxWidth),
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.translucent,
+                                    onTap: _onVideoClick,
+                                  ),
+                                ),
                               ),
                             ),
                           // 자막 상자가 클릭을 받도록 조작부 위에 둔다 (상자 밖은 통과)
