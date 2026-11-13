@@ -49,4 +49,6 @@ CI가 PR마다 macOS를 release로 빌드해 앱 안의 모든 실행 파일·�
 - Windows는 설치본 없이 zip으로 배포한다 (Release 폴더 전체를 풀어 `transcue.exe` 실행).
 - macOS 앱은 아직 Apple 개발자 서명·공증을 하지 않았다. 처음 열 때 "확인되지 않은 개발자" 경고가 나오면
   Finder에서 Control-클릭 → 열기. 정식 배포 전에 서명·공증이 필요하다.
-- 외부 도구(ffmpeg, whisper-cli, yt-dlp)는 각 PC에 설치한다. macOS는 Homebrew가 그 Mac의 CPU에 맞는 것을 설치한다.
+- 외부 도구(ffmpeg, whisper-cli, yt-dlp)는 각 PC에 설치한다. macOS는 Homebrew가 그 Mac의 CPU에 맞는 것을 설치한다
+  (`brew install ffmpeg whisper-cpp yt-dlp`). whisper-cpp에는 Parakeet용 `parakeet-cli`도 함께 들어 있다.
+  Homebrew의 whisper-cpp는 미리 빌드된 파일이 Apple Silicon용만 있어, Intel Mac에서는 설치할 때 소스부터 빌드한다(시간이 걸림).
