@@ -4,6 +4,7 @@ import 'dart:ui' show AppExitResponse;
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -82,6 +83,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 전체 화면에서 보여 줄 안내 (SnackBar는 전체 화면 뒤에 가려진다)
   final _flash = ValueNotifier<String?>(null);
   final _centerHint = ValueNotifier<Widget?>(null); // 화살표 키 조작 표시
+
+  /// 데스크톱 화면 밝기 (영상을 덮어 어둡게 한다, 1 = 원래 밝기). 앱을 다시 열면 돌아온다.
+  final _screenBrightness = ValueNotifier<double>(1);
   Timer? _flashTimer;
 
   @override
@@ -182,6 +186,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _flash.dispose();
     _centerHintTimer?.cancel();
     _centerHint.dispose();
+    _screenBrightness.dispose();
     if (!_playerClosed) {
       _playerClosed = true;
       _player.dispose();
@@ -747,6 +752,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
+  /// 영상 위에서 휠: 오른쪽 절반은 소리, 왼쪽 절반은 밝기 (Android 위/아래 밀기와 같은 배치)
+  void _onWheel(PointerSignalEvent e, double width) {
+    if (e is! PointerScrollEvent) return;
+    final step = wheelStep(e.scrollDelta);
+    if (step == 0) return;
+    // 같은 휠 입력을 다른 곳(목록 스크롤 등)과 나눠 처리하지 않게 한 곳만 받는다
+    GestureBinding.instance.pointerSignalResolver.register(e, (_) {
+      if (e.localPosition.dx < width / 2) {
+        _changeBrightness(step * brightnessStep);
+      } else {
+        _changeVolume(step * volumeKeyStep);
+      }
+    });
+  }
+
+  /// 화면 밝기를 바꾸고 화면 가운데에 잠깐 보여 준다 (데스크톱)
+  void _changeBrightness(double delta) {
+    final b = steppedBrightness(_screenBrightness.value, delta);
+    _screenBrightness.value = b;
+    _showCenterHint(VolumeIndicator(value: b, brightness: true));
+  }
+
   /// 음량을 바꾸고 화면 가운데에 잠깐 보여 준다
   void _changeVolume(double delta) {
     // 키를 누르고 있으면 플레이어 값이 갱신되기 전에 다음 입력이 오므로 직전 목표값을 기준으로 한다
@@ -821,6 +848,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late final _controlsTheme = MaterialDesktopVideoControlsThemeData(
     playAndPauseOnTap: false,
     toggleFullscreenOnDoublePress: false,
+    // 휠은 [_onWheel]이 처리한다 (오른쪽은 소리·왼쪽은 밝기, 가운데 표시)
+    modifyVolumeOnScroll: false,
     visibleOnMount: _pinControls,
     controlsHoverDuration: _pinControls
         ? const Duration(hours: 1)
@@ -927,6 +956,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
       Platform.isAndroid ||
       Platform.isIOS ||
       (kDebugMode && Platform.environment['DUALCUE_TOUCH'] == '1');
+
+  /// 화면 밝기를 낮췄을 때 영상을 덮는 검은 막 (전체 화면에서도 바뀌도록 알림을 구독)
+  Widget _dimLayer() => ValueListenableBuilder<double>(
+    valueListenable: _screenBrightness,
+    builder: (_, b, _) => b >= 1
+        ? const SizedBox.shrink()
+        : IgnorePointer(
+            child: ColoredBox(
+              color: Colors.black.withValues(alpha: 1 - b),
+              child: const SizedBox.expand(),
+            ),
+          ),
+  );
 
   /// 상단 메뉴 버튼. 버튼이 포커스를 가져가면 Space/Enter가 버튼을 누르게 되므로 제외한다.
   Widget _menuActions() => ExcludeFocus(
@@ -1145,6 +1187,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       // controls 빌더는 전체 화면에서도 다시 쓰이므로 자막을 여기에 넣는다
                       controls: (state) => Stack(
                         children: [
+                          // 화면 밝기 (데스크톱): 영상만 어둡게. 자막·조작부는 이 위에 그린다
+                          if (!_touch) _dimLayer(),
                           if (_touch)
                             MaterialVideoControls(state)
                           else
@@ -1159,9 +1203,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
                               left: 0,
                               right: 0,
                               bottom: 84,
-                              child: GestureDetector(
-                                behavior: HitTestBehavior.translucent,
-                                onTap: _onVideoClick,
+                              child: LayoutBuilder(
+                                builder: (context, box) => Listener(
+                                  behavior: HitTestBehavior.translucent,
+                                  onPointerSignal: (e) =>
+                                      _onWheel(e, box.maxWidth),
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.translucent,
+                                    onTap: _onVideoClick,
+                                  ),
+                                ),
                               ),
                             ),
                           // 자막 상자가 클릭을 받도록 조작부 위에 둔다 (상자 밖은 통과)
