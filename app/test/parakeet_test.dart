@@ -24,6 +24,22 @@ void main() {
     }
   });
 
+  test('Android(JNI)가 돌려주는 토큰 줄도 같은 방식으로 문장이 된다', () {
+    // whisper_jni.cpp nativeParakeet 출력 형식 (CLI에서 id·frame 등을 뺀 것)
+    final lines = [
+      '[0] t0=0 t1=8 word_start=true "▁Hello"',
+      '[1] t0=8 t1=12 word_start=false "▁there"',
+      '[2] t0=12 t1=14 word_start=false "."',
+      '[0] t0=150 t1=160 word_start=true "▁Say"',
+      '[1] t0=160 t1=170 word_start=false "▁"hi""',
+      '[2] t0=170 t1=172 word_start=false "."',
+      '',
+    ];
+    final cues = parseParakeetTokens(lines);
+    expect(cues.map((c) => c.original), ['Hello there.', 'Say "hi".']);
+    expect(cues[1].start, const Duration(milliseconds: 1500));
+  });
+
   test('음성 파일을 못 읽으면 exit 0이어도 실패로 본다', () {
     // 실제 parakeet-cli 출력 (exit code 0)
     expect(

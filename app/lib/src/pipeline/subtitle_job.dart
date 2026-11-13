@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../online/opensubtitles.dart';
 import '../player/resume.dart' show formatPosition;
 import '../settings/app_settings.dart';
+import '../source/youtube_backend.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
 import '../subtitle/webvtt.dart';
@@ -32,7 +33,9 @@ class LocalFileSource extends JobSource {
 class YoutubeSource extends JobSource {
   const YoutubeSource(this.media, this.ytDlp);
   final YoutubeMedia media;
-  final YtDlp ytDlp;
+
+  /// 데스크톱 yt-dlp 또는 Android 순수 Dart
+  final YoutubeBackend ytDlp;
 }
 
 enum JobStage {
@@ -422,7 +425,7 @@ class SubtitleJob extends ChangeNotifier {
               parseWebVtt(await ytDlp.fetchCaption(media, ko)),
             );
             _setCues(c);
-          } on YtDlpException catch (e) {
+          } on Exception catch (e) {
             debugPrint('YouTube Korean captions failed: $e');
           }
         }
@@ -871,7 +874,8 @@ class SubtitleJob extends ChangeNotifier {
     _parakeetStarted = true;
     () async {
       try {
-        await parakeetCli(); // 없으면 예외
+        // 데스크톱은 parakeet-cli가 있어야 한다 (Android는 앱에 함께 빌드되어 있다)
+        if (hasDesktopTools) await parakeetCli(); // 없으면 예외
         final f = await ensureModelFile(
           ParakeetModel.file,
           ParakeetModel.url,
@@ -925,7 +929,7 @@ class SubtitleJob extends ChangeNotifier {
     final vad = await ensureVadModel();
     // 영어로 확인된 구간은 Parakeet으로 (모델은 처음 필요할 때 뒤에서 받는다)
     final wantParakeet =
-        settings.englishStt == EnglishStt.parakeet && hasDesktopTools;
+        settings.englishStt == EnglishStt.parakeet && canUseParakeet;
     var parakeetRuns = 0;
 
     final (input, headers, duration) = switch (source) {

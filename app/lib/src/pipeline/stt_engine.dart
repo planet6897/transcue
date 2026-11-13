@@ -16,6 +16,10 @@ final bool canTranscribe = hasDesktopTools || Platform.isAndroid;
 
 const _channel = MethodChannel('transcue/whisper');
 
+/// 영어 구간을 Parakeet으로 인식할 수 있는지. 데스크톱은 parakeet-cli(whisper.cpp 배포본),
+/// Android는 앱에 함께 빌드한 whisper.cpp의 Parakeet(JNI)을 쓴다.
+final bool canUseParakeet = hasDesktopTools || Platform.isAndroid;
+
 /// 영상 [input]의 [start]부터 [length]만큼 받아 적는다.
 /// 큐 시간은 [start] 기준(0부터). 소리가 없으면(영상 끝) [SttEnd].
 Stream<SttEvent> transcribeRange({
@@ -29,10 +33,14 @@ Stream<SttEvent> transcribeRange({
   String? fallbackLanguage,
   required Directory tmp,
 
-  /// 있으면 whisper 대신 Parakeet으로 인식한다 (영어로 확인된 구간, 데스크톱만)
+  /// 있으면 whisper 대신 Parakeet으로 인식한다 (영어로 확인된 구간)
   File? parakeetModel,
 }) async* {
   if (Platform.isAndroid) {
+    if (parakeetModel != null) {
+      yield* _parakeetAndroid(input, start, length, parakeetModel);
+      return;
+    }
     yield* _transcribeAndroid(input, start, length, model, vadModel, language);
     return;
   }
@@ -91,6 +99,34 @@ Future<List<(int, int)>> speechInRange({
 List<(int, int)> pairSegments(List<int> ms) => [
   for (var i = 0; i + 1 < ms.length; i += 2) (ms[i], ms[i + 1]),
 ];
+
+/// Android Parakeet: 기기에서 받아 적은 토큰 줄을 데스크톱과 같은 방식으로 문장으로 묶는다.
+/// 인식에 실패하면 PlatformException (작업이 whisper로 넘어간다).
+Stream<SttEvent> _parakeetAndroid(
+  String path,
+  Duration start,
+  Duration length,
+  File model,
+) async* {
+  final r = await _channel.invokeMapMethod<String, Object?>('parakeet', {
+    'path': path,
+    'startMs': start.inMilliseconds,
+    'lengthMs': length.inMilliseconds,
+    'model': model.path,
+  });
+  debugPrint(
+    '[stt] android parakeet ${start.inSeconds}s+${length.inSeconds}s: '
+    'audio ${r?['audioMs']}ms decode ${r?['decodeMs']}ms parakeet ${r?['parakeetMs']}ms',
+  );
+  final text = r?['text'] as String?;
+  if (text == null) {
+    yield SttEnd();
+    return;
+  }
+  for (final c in parseParakeetTokens(text.split('\n'))) {
+    yield SttCue(c);
+  }
+}
 
 Stream<SttEvent> _transcribeAndroid(
   String path,

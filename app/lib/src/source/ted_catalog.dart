@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'yt_dlp.dart';
+import 'youtube_backend.dart';
 
 /// YouTube 제목에서 강연자를 떼는 방식
 enum TitleStyle {
@@ -370,7 +370,8 @@ String formatViews(int n) {
 class TedCatalog {
   TedCatalog(this.ytDlp, this.cacheFile);
 
-  final YtDlp ytDlp;
+  /// 데스크톱 yt-dlp 또는 Android 순수 Dart
+  final YoutubeBackend ytDlp;
   final File cacheFile;
 
   static const pageSize = 30;
