@@ -31,7 +31,7 @@ void main() {
       '[1] t0=8 t1=12 word_start=false "▁there"',
       '[2] t0=12 t1=14 word_start=false "."',
       '[0] t0=150 t1=160 word_start=true "▁Say"',
-      '[1] t0=160 t1=170 word_start=false "▁\"hi\""',
+      '[1] t0=160 t1=170 word_start=false "▁"hi""',
       '[2] t0=170 t1=172 word_start=false "."',
       '',
     ];
