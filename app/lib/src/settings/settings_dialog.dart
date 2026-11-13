@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../app_version.dart';
 import '../pipeline/stt_engine.dart' show canUseParakeet;
 import 'app_settings.dart';
 
@@ -50,7 +51,16 @@ class _SettingsDialogState extends State<SettingsDialog> {
   Widget build(BuildContext context) {
     final hint = Theme.of(context).textTheme.bodySmall;
     return AlertDialog(
-      title: const Text('설정'),
+      title: Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          const Text('설정'),
+          const Spacer(),
+          // 문제를 알릴 때 어느 버전인지 알 수 있게
+          Text('Transcue $appVersionLabel', style: hint),
+        ],
+      ),
       content: SizedBox(
         width: 460,
         child: SingleChildScrollView(
