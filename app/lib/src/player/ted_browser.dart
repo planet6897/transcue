@@ -4,17 +4,26 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../source/ted_catalog.dart';
+import 'online_queue.dart';
 import 'resume.dart' show formatPosition;
 
 /// 영어 강연·학습 채널(TED, TED-Ed, TEDx, BBC·VOA Learning English)에서 영상 고르기.
 /// 위는 채널·검색, 왼쪽은 분류(최신 영상 + 채널 재생목록), 오른쪽은 영상.
-/// 고른 영상의 YouTube ID를 돌려준다.
+/// 고른 영상과, 그때 보이던 목록 순서를 [OnlineQueue]로 돌려준다 (연속 재생용).
 ///
 /// 자막이 없는 영상도 음성 인식·번역으로 이중 자막을 만들 수 있으므로 거르지 않는다.
 class TedBrowserDialog extends StatefulWidget {
-  const TedBrowserDialog({super.key, required this.catalog, this.watched});
+  const TedBrowserDialog({
+    super.key,
+    required this.catalog,
+    this.watched,
+    this.autoPick,
+  });
 
   final TedCatalog catalog;
+
+  /// 개발용(DUALCUE_TED_PICK): 최신 영상을 받으면 이 위치의 영상을 바로 고른다
+  final int? autoPick;
 
   /// 본 적 있는 영상인지 (재생 횟수 등). 목록에 표시만 한다.
   final Future<bool> Function(String id)? watched;
@@ -205,6 +214,10 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
       _checkWatched(s.videos);
       if (feed.kind == TedFeedKind.latest) {
         unawaited(widget.catalog.save(s.videos, feed.channel));
+        final pick = widget.autoPick;
+        if (pick != null && pick < s.videos.length) {
+          Navigator.pop(context, OnlineQueue(s.videos, pick));
+        }
       }
     } on Exception catch (e) {
       if (mounted) setState(() => s.error = '$e');
@@ -544,7 +557,7 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
                             )
                           : const SizedBox(height: 16);
                     }
-                    return _videoTile(videos[i]);
+                    return _videoTile(videos, i);
                   },
                 ),
         ),
@@ -552,23 +565,27 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
     );
   }
 
-  Widget _videoTile(TedVideo v) => ListTile(
-    leading: ClipRRect(
-      borderRadius: BorderRadius.circular(4),
-      child: Image.network(
-        v.thumbnailUrl,
-        width: 112,
-        height: 63,
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => const SizedBox(
+  Widget _videoTile(List<TedVideo> videos, int i) {
+    final v = videos[i];
+    return ListTile(
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: Image.network(
+          v.thumbnailUrl,
           width: 112,
           height: 63,
-          child: Icon(Icons.smart_display),
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => const SizedBox(
+            width: 112,
+            height: 63,
+            child: Icon(Icons.smart_display),
+          ),
         ),
       ),
-    ),
-    title: Text(v.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-    subtitle: Text(_detail(v), maxLines: 1, overflow: TextOverflow.ellipsis),
-    onTap: () => Navigator.pop(context, v.id),
-  );
+      title: Text(v.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+      subtitle: Text(_detail(v), maxLines: 1, overflow: TextOverflow.ellipsis),
+      // 보이는 순서(정렬·필터 적용) 그대로 연속 재생한다
+      onTap: () => Navigator.pop(context, OnlineQueue(videos, i)),
+    );
+  }
 }

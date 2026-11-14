@@ -23,6 +23,7 @@ import '../subtitle/bilingual_cue.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
 import '../pipeline/tools.dart';
 import 'file_browser.dart';
+import 'online_queue.dart';
 import 'play_counts.dart';
 import 'playlist.dart';
 import 'recent_videos.dart';
@@ -298,6 +299,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _openPath(String path) async {
     await _rememberPosition(); // 보던 영상의 위치를 먼저 기록
+    _onlineQueue = null; // 내 파일은 폴더 순서로 연속 재생한다
     setState(() {
       _title = path.split(Platform.pathSeparator).last;
       _currentPath = path;
@@ -376,23 +378,37 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final dir = (await AppSettings.supportDir()).path;
     final counts = await _countStore();
     if (!mounted) return;
-    final id = await showDialog<String>(
+    final pick = await showDialog<OnlineQueue>(
       context: context,
       builder: (_) => TedBrowserDialog(
         catalog: TedCatalog(_ytDlp, File('$dir/ted_catalog.json')),
         watched: (id) async =>
             await counts.get(PlaybackPositions.keyForYoutube(id)) > 0,
+        // 개발용: DUALCUE_TED_PICK=<번호> 로 실행하면 최신 영상 중 그 영상을 바로 연다
+        autoPick: kDebugMode
+            ? int.tryParse(Platform.environment['DUALCUE_TED_PICK'] ?? '')
+            : null,
       ),
     );
-    if (id == null) return;
-    await _openYoutubeUrl(youtubeWatchUrl(id));
+    if (pick == null) return;
+    await _openYoutubeUrl(youtubeWatchUrl(pick.current.id), queue: pick);
   }
 
-  Future<void> _openYoutubeUrl(String url) async {
+  /// 채널 목록에서 고른 영상들의 재생 순서 (연속 재생·이전/다음 영상). 없으면 null.
+  OnlineQueue? _onlineQueue;
+
+  /// [queue]: 채널 목록에서 골랐을 때 그 순서. 없이 열면(최근 재생목록·주소) 지금 순서에
+  /// 그 영상이 있으면 그 자리부터 이어 가고, 없으면 순서를 지운다.
+  Future<void> _openYoutubeUrl(String url, {OnlineQueue? queue}) async {
     final id = parseYoutubeId(url);
     if (id == null) {
       _toast('YouTube 링크가 아닙니다');
       return;
+    }
+    if (queue != null) {
+      _onlineQueue = queue;
+    } else if (!(_onlineQueue?.moveTo(id) ?? false)) {
+      _onlineQueue = null;
     }
 
     setState(() => _loading = true);
@@ -418,6 +434,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
         await _player.setAudioTrack(AudioTrack.uri(media.audioUrl!));
       }
       await _resumeAt(PlaybackPositions.keyForYoutube(id), loaded);
+      // 개발용: DUALCUE_SEEK_END=<초> 면 끝나기 그만큼 전으로 (연속 재생 확인용)
+      final seekEnd = kDebugMode
+          ? int.tryParse(Platform.environment['DUALCUE_SEEK_END'] ?? '')
+          : null;
+      if (seekEnd != null) {
+        final d = await loaded;
+        await _player.seek(d - Duration(seconds: seekEnd));
+        debugPrint(
+          '[seek-end] $id ${(d.inSeconds - seekEnd)}s/${d.inSeconds}s',
+        );
+      }
       if (kDebugMode) unawaited(_debugAudioState());
       _startJob(YoutubeSource(media, _ytDlp));
     } catch (e) {
@@ -770,8 +797,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
       unawaited(_player.seek(Duration.zero).then((_) => _player.play()));
       return;
     }
+    if (!_settings.autoPlayNext) return;
+    if (_onlineQueue != null) {
+      _playNextOnline();
+      return;
+    }
     final path = _currentPath;
-    if (!_settings.autoPlayNext || path == null) return;
+    if (path == null) return;
     final next = neighborVideo(path);
     if (next == null) {
       _toast('마지막 영상입니다');
@@ -784,8 +816,43 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
   }
 
+  /// 채널 목록 순서의 다음 영상 (연속 재생)
+  void _playNextOnline() {
+    final queue = _onlineQueue!;
+    final from = queue.current.id;
+    final next = queue.neighbor(1);
+    if (next == null) {
+      _toast('목록의 마지막 영상입니다');
+      return;
+    }
+    _toast('다음 영상: ${next.title}');
+    // 끝 화면을 잠깐 보여 준 뒤 넘어간다. 그 사이 사용자가 다른 영상을 열었으면 취소
+    Future<void>.delayed(const Duration(milliseconds: 1500), () {
+      if (mounted &&
+          identical(_onlineQueue, queue) &&
+          queue.current.id == from) {
+        queue.index++;
+        _openYoutubeUrl(youtubeWatchUrl(next.id), queue: queue);
+      }
+    });
+  }
+
+  /// 이전/다음 영상이 있는지 (내 파일은 폴더 순서, 채널 영상은 목록 순서)
+  bool get _canSkip => _currentPath != null || _onlineQueue != null;
+
   /// 이전/다음 영상으로 이동 (P / N)
   void _skip(int delta) {
+    final queue = _onlineQueue;
+    if (queue != null) {
+      final target = queue.neighbor(delta);
+      if (target == null) {
+        _toast(delta > 0 ? '다음 영상이 없습니다' : '이전 영상이 없습니다');
+        return;
+      }
+      queue.index += delta;
+      _openYoutubeUrl(youtubeWatchUrl(target.id), queue: queue);
+      return;
+    }
     final path = _currentPath;
     if (path == null) return;
     final target = neighborVideo(path, delta: delta);
@@ -1212,12 +1279,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
         IconButton(
           tooltip: '이전 영상 (P)',
           icon: const Icon(Icons.skip_previous),
-          onPressed: _currentPath == null ? null : () => _skip(-1),
+          onPressed: _canSkip ? () => _skip(-1) : null,
         ),
         IconButton(
           tooltip: '다음 영상 (N)',
           icon: const Icon(Icons.skip_next),
-          onPressed: _currentPath == null ? null : () => _skip(1),
+          onPressed: _canSkip ? () => _skip(1) : null,
         ),
         IconButton(
           tooltip: _settings.autoPlayNext ? '연속 재생 켜짐' : '연속 재생 꺼짐',
