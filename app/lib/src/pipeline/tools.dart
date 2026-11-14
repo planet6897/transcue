@@ -22,7 +22,18 @@ final bool hasDesktopTools =
 const lenientUtf8 = Utf8Codec(allowMalformed: true);
 
 const whisperInstallHint =
-    'brew install whisper-cpp / Windows: scripts\\setup-windows.ps1';
+    'brew install whisper-cpp / Windows: scripts\\setup-windows.ps1 / '
+    'Linux: scripts/setup-linux.sh';
+
+/// macOS·Linux에서 PATH 외에 찾아볼 폴더.
+/// macOS GUI 앱은 셸 PATH를 물려받지 않아 Homebrew 경로를 직접 본다. Linux도 바탕 화면에서
+/// 띄우면 `~/.local/bin`(scripts/setup-linux.sh가 설치하는 곳)이 PATH에 없을 수 있다.
+List<String> unixToolDirs(Map<String, String> env, {required bool linux}) {
+  final home = env['HOME'];
+  return linux
+      ? [if (home != null) '$home/.local/bin', '/usr/local/bin', '/usr/bin']
+      : ['/opt/homebrew/bin', '/usr/local/bin'];
+}
 
 /// Windows에서 PATH 외에 찾아볼 폴더.
 /// 앱을 띄운 뒤(또는 탐색기를 다시 시작하기 전에) 설치하면 PATH가 갱신되지 않으므로 직접 본다.
@@ -53,7 +64,7 @@ String? pickWindowsExecutable(String whereOutput) {
 }
 
 /// 외부 실행 파일(ffmpeg, ffprobe, whisper-cli, yt-dlp)을 찾는다. 없으면 null.
-/// macOS GUI 앱은 셸 PATH를 물려받지 않으므로 Homebrew 경로를 먼저 본다.
+/// 설치하는 곳으로 알려진 폴더([windowsToolDirs], [unixToolDirs])를 먼저 보고, 없으면 PATH에서 찾는다.
 ///
 /// TODO(M5): 배포판에서는 앱에 번들하거나 앱 지원 폴더에 내려받은 것을 쓴다.
 Future<String?> locateTool(String name) async {
@@ -64,7 +75,13 @@ Future<String?> locateTool(String name) async {
           for (final dir in windowsToolDirs(Platform.environment))
             '$dir\\$name.exe',
         ]
-      : ['/opt/homebrew/bin/$name', '/usr/local/bin/$name'];
+      : [
+          for (final dir in unixToolDirs(
+            Platform.environment,
+            linux: Platform.isLinux,
+          ))
+            '$dir/$name',
+        ];
   for (final p in candidates) {
     if (await File(p).exists()) return _cache[name] = p;
   }
@@ -103,13 +120,14 @@ Future<void> deleteTempDir(Directory dir) async {
   }
 }
 
-Future<String> ffmpeg() =>
-    findTool('ffmpeg', install: 'brew install ffmpeg / winget install ffmpeg');
-Future<String> ffprobe() =>
-    findTool('ffprobe', install: 'brew install ffmpeg / winget install ffmpeg');
+const _ffmpegInstallHint =
+    'brew install ffmpeg / winget install ffmpeg / Linux: sudo apt install ffmpeg';
+
+Future<String> ffmpeg() => findTool('ffmpeg', install: _ffmpegInstallHint);
+Future<String> ffprobe() => findTool('ffprobe', install: _ffmpegInstallHint);
 Future<String> whisperCli() =>
     findTool('whisper-cli', install: whisperInstallHint);
 
-/// whisper.cpp v1.9.2 Windows 배포본에 함께 들어 있는 Parakeet 실행 파일
+/// whisper.cpp에 함께 들어 있는 Parakeet 실행 파일 (Windows 배포본 v1.9.2, Homebrew, setup-linux.sh)
 Future<String> parakeetCli() =>
     findTool('parakeet-cli', install: whisperInstallHint);

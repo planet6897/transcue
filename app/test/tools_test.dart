@@ -35,4 +35,17 @@ void main() {
     expect(await dir.exists(), isFalse);
     await deleteTempDir(dir);
   });
+
+  test('macOS·Linux에서 PATH 외에 찾아볼 폴더', () {
+    expect(unixToolDirs({'HOME': '/home/me'}, linux: true), [
+      '/home/me/.local/bin',
+      '/usr/local/bin',
+      '/usr/bin',
+    ]);
+    expect(unixToolDirs({}, linux: true), ['/usr/local/bin', '/usr/bin']);
+    expect(unixToolDirs({'HOME': '/Users/me'}, linux: false), [
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+    ]);
+  });
 }

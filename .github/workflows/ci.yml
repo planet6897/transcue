@@ -17,13 +17,18 @@ jobs:
 
   app:
     strategy:
-      matrix: { os: [macos-latest, windows-latest] }
+      matrix: { os: [macos-latest, windows-latest, ubuntu-latest] }
     runs-on: ${{ matrix.os }}
     defaults: { run: { working-directory: app } }
     steps:
       - uses: actions/checkout@v5
       - uses: subosito/flutter-action@v2
         with: { channel: stable, flutter-version: 3.41.6, cache: true }
+      # Flutter Linux 데스크톱 빌드 도구 + media_kit이 쓰는 libmpv
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libmpv-dev mpv
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
@@ -37,3 +42,5 @@ jobs:
       - if: runner.os == 'Windows'
         shell: bash
         run: flutter build windows --debug || (rm -f build/windows/x64/mpv-dev-*.7z && flutter build windows --debug)
+      - if: runner.os == 'Linux'
+        run: flutter build linux --debug
