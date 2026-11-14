@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-14
+
 ### 추가
 - Android TV·Google TV(Chromecast with Google TV 등) 지원: TV 홈 화면에 앱이 보이고, 리모컨으로 조작한다.
   ↑/↓로 상단 메뉴를 열어 ←/→로 버튼을 옮기고 가운데 버튼으로 누르며, 뒤로 버튼으로 닫는다.
