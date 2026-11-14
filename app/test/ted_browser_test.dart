@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:transcue/src/player/online_queue.dart';
 import 'package:transcue/src/player/ted_browser.dart';
 import 'package:transcue/src/source/ted_catalog.dart';
 import 'package:transcue/src/source/yt_dlp.dart';
@@ -91,7 +92,11 @@ void main() {
     File('${dir.path}/ted.json'),
   );
 
+  /// 목록에서 고른 결과 (연속 재생 순서)
+  OnlineQueue? picked;
+
   Future<void> open(WidgetTester tester, Size size) async {
+    picked = null;
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -101,7 +106,7 @@ void main() {
         home: Builder(
           builder: (context) => Center(
             child: TextButton(
-              onPressed: () => showDialog<String>(
+              onPressed: () async => picked = await showDialog<OnlineQueue>(
                 context: context,
                 builder: (_) => TedBrowserDialog(catalog: cat),
               ),
@@ -200,5 +205,22 @@ void main() {
       last = (await tester.runAsync(reader.lastChannel))?.id;
     }
     expect(last, 'bbc-le');
+  });
+
+  testWidgets('영상을 고르면 보이던 순서(정렬 적용)와 위치를 연속 재생 순서로 돌려준다', (tester) async {
+    await open(tester, const Size(1280, 800));
+    await tester.tap(find.text('기본 순서'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('조회수 높은 순').last);
+    await tester.pumpAndSettle();
+    // 조회수 순: 29, 28, 27, ... → 세 번째 = 27번
+    await tester.tap(find.text('Latest talk 27'));
+    await tester.pumpAndSettle();
+    final q = picked!;
+    expect(q.current.title, 'Latest talk 27');
+    expect(q.index, 2);
+    expect(q.neighbor(1)?.title, 'Latest talk 26');
+    expect(q.neighbor(-1)?.title, 'Latest talk 28');
+    expect(find.byType(TedBrowserDialog), findsNothing);
   });
 }
