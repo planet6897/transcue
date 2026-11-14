@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -45,11 +46,36 @@ class TrackpadSteps {
 }
 
 /// 휠 한 칸의 방향: 위로 굴리면 +1, 아래로 굴리면 -1
-int wheelStep(Offset scrollDelta) => scrollDelta.dy < 0
-    ? 1
-    : scrollDelta.dy > 0
-    ? -1
-    : 0;
+///
+/// [natural]은 macOS의 "자연스러운 스크롤"이 켜진 경우. 이때는 시스템이 휠 방향을
+/// 뒤집어 보내므로 (위로 굴리면 dy가 +) 다시 뒤집어 손으로 굴린 방향에 맞춘다.
+int wheelStep(Offset scrollDelta, {bool natural = false}) {
+  final dy = natural ? -scrollDelta.dy : scrollDelta.dy;
+  return dy < 0
+      ? 1
+      : dy > 0
+      ? -1
+      : 0;
+}
+
+/// macOS "자연스러운 스크롤" 설정 (다른 OS는 항상 false). [refreshNaturalScroll]이 채운다.
+bool naturalScroll = false;
+
+/// macOS의 자연스러운 스크롤 설정을 읽어 [naturalScroll]에 둔다. 앱을 켠 채로
+/// 설정을 바꿀 수 있으니 재생 화면을 열 때와 휠을 굴릴 때마다 다시 읽는다.
+Future<void> refreshNaturalScroll() async {
+  if (defaultTargetPlatform != TargetPlatform.macOS) return;
+  try {
+    naturalScroll =
+        await const MethodChannel(
+          'transcue/scroll',
+        ).invokeMethod<bool>('natural') ??
+        true;
+  } on Object {
+    // 못 읽으면 macOS 기본값(켜짐)으로 본다
+    naturalScroll = true;
+  }
+}
 
 /// Android 기기 음량을 휠 한 칸에 바꾸는 양 (0~1). 기기 음량은 단계값(보통 0~15)이라
 /// 한 단계 이상 움직이도록 1/15로 한다.

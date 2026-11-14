@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../source/ted_catalog.dart';
 import 'online_queue.dart';
 import 'resume.dart' show formatPosition;
+import 'tv.dart';
 
 /// 영어 강연·학습 채널(TED, TED-Ed, TEDx, BBC·VOA Learning English)에서 영상 고르기.
 /// 위는 채널·검색, 왼쪽은 분류(최신 영상 + 채널 재생목록), 오른쪽은 영상.
@@ -309,23 +310,27 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
     children: [
       if (!compact) ...[_channelPicker(), const SizedBox(width: 24)],
       Expanded(
-        child: TextField(
+        child: TvTextField(
           controller: _query,
-          textInputAction: TextInputAction.search,
-          onSubmitted: (_) => _search(),
-          style: const TextStyle(fontSize: 15),
-          decoration: InputDecoration(
-            isDense: true,
-            hintText: compact
-                ? '${_channel.name} 검색'
-                : '${_channel.name}에서 검색 (영어: happiness, grammar …)',
-            prefixIcon: const Icon(Icons.search, size: 20),
-            suffixIcon: IconButton(
-              tooltip: '검색',
-              icon: const Icon(Icons.arrow_forward, size: 20),
-              onPressed: _search,
+          builder: (focus) => TextField(
+            focusNode: focus,
+            controller: _query,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (_) => _search(),
+            style: const TextStyle(fontSize: 15),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: compact
+                  ? '${_channel.name} 검색'
+                  : '${_channel.name}에서 검색 (영어: happiness, grammar …)',
+              prefixIcon: const Icon(Icons.search, size: 20),
+              suffixIcon: IconButton(
+                tooltip: '검색',
+                icon: const Icon(Icons.arrow_forward, size: 20),
+                onPressed: _search,
+              ),
+              border: const OutlineInputBorder(),
             ),
-            border: const OutlineInputBorder(),
           ),
         ),
       ),
@@ -403,22 +408,26 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
         const Divider(height: 1),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-          child: TextField(
+          child: TvTextField(
             controller: _filter,
-            style: const TextStyle(fontSize: 13),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: '분류 ${_playlists.length}개에서 찾기',
-              prefixIcon: const Icon(Icons.filter_list, size: 18),
-              suffixIcon: _playlistsLoading
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: SizedBox.square(
-                        dimension: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    )
-                  : null,
+            builder: (focus) => TextField(
+              focusNode: focus,
+              controller: _filter,
+              style: const TextStyle(fontSize: 13),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: '분류 ${_playlists.length}개에서 찾기',
+                prefixIcon: const Icon(Icons.filter_list, size: 18),
+                suffixIcon: _playlistsLoading
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox.square(
+                          dimension: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : null,
+              ),
             ),
           ),
         ),
