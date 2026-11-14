@@ -122,7 +122,7 @@ class DartYoutube implements YoutubeBackend {
 
 /// 자막 고르기 (데스크톱 [YoutubeMedia.fromInfoJson]과 같은 순서).
 /// 원어: 사람이 단 영어 → 자동 자막(음성 언어) → 사람이 단 첫 자막.
-/// 한국어: 사람이 단 것만 (YouTube 자동 번역은 요청이 막히는 일이 많아 Claude 번역으로 넘긴다).
+/// 한국어: 사람이 단 것만 (YouTube 자동 번역은 요청이 막히는 일이 많아 AI 번역으로 넘긴다).
 /// (원어, 한국어, 영상 언어)
 (CaptionTrack?, CaptionTrack?, String?) pickCaptions(
   List<CaptionTrack> tracks,

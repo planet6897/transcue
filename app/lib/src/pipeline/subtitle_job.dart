@@ -12,7 +12,7 @@ import '../source/youtube_backend.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
 import '../subtitle/webvtt.dart';
-import '../translate/claude_translator.dart';
+import '../translate/translators.dart';
 import 'media_tools.dart';
 import 'speech_check.dart';
 import 'stt_engine.dart';
@@ -64,7 +64,7 @@ enum JobRefresh {
 /// 영상 하나의 이중 자막을 만드는 작업.
 ///
 /// 순서: 캐시 → (내장 자막 | YouTube 자막) → 없으면 음성 추출 + whisper STT
-///       → 한국어가 없는 줄은 Claude 번역. STT/번역 결과는 생기는 대로 [cues]에 반영.
+///       → 한국어가 없는 줄은 AI 번역. STT/번역 결과는 생기는 대로 [cues]에 반영.
 /// 구간마다 감지한 언어를 합친다. 영상 안에서 언어가 바뀌면 'auto'가 된다.
 String mergeSpokenLang(String? current, String detected) =>
     current == null || current == detected ? detected : 'auto';
@@ -417,7 +417,7 @@ class SubtitleJob extends ChangeNotifier {
         originalFrom = orig.auto ? 'YouTube 자동 자막' : 'YouTube 자막';
         _setCues(c);
         final ko = media.korean;
-        // YouTube 자동 번역은 429가 잦아 실패해도 Claude 번역으로 넘어간다
+        // YouTube 자동 번역은 429가 잦아 실패해도 AI 번역으로 넘어간다
         if (ko != null) {
           try {
             c = mergeTranslation(
@@ -538,14 +538,15 @@ class SubtitleJob extends ChangeNotifier {
   }
 
   /// 인터넷 한국어 자막이 원문 줄과 시간이 맞는지.
-  /// 절반 넘게 비어 있으면 다른 편집본 자막이라 버리고 Claude 번역을 쓴다.
+  /// 절반 넘게 비어 있으면 다른 편집본 자막이라 버리고 AI 번역을 쓴다.
   void _checkKoreanTiming() {
     // 음성 인식 원문은 줄을 다르게 나눠서 비교 기준이 못 된다
     if (_onlineKorean == null || !_onlineOriginal || cues.isEmpty) return;
     final r = koreanCoverage(cues);
     debugPrint('korean timing: ${(r * 100).round()}% of lines covered');
     if (r >= 0.5) return;
-    notice = '인터넷 한국어 자막이 음성과 맞지 않아(${(r * 100).round()}%) Claude로 번역합니다';
+    notice =
+        '인터넷 한국어 자막이 음성과 맞지 않아(${(r * 100).round()}%) ${settings.provider.label}로 번역합니다';
     _onlineKorean = null;
     _setCues([for (final c in cues) c.withTranslation(null)]);
     unawaited(_saveCache());
@@ -899,7 +900,7 @@ class SubtitleJob extends ChangeNotifier {
     final chunk = active == null
         ? ''
         : ' · $active 인식 중 ${_chunkWatch.elapsed.inSeconds}초';
-    final trans = settings.hasClaudeKey && sourceLang != 'ko'
+    final trans = settings.hasTranslateKey && sourceLang != 'ko'
         ? ' · 번역 $t줄'
         : '';
     final dl = _parakeetDownload;
@@ -1121,7 +1122,7 @@ class SubtitleJob extends ChangeNotifier {
   /// 번역이 필요한 줄: 번역이 없거나 사용자가 다시 번역을 요청한 줄
   bool _wantsTranslation(BilingualCue c) =>
       !isMostlyKorean(c.original) &&
-      (c.translation == null || (c.provisional && settings.hasClaudeKey));
+      (c.translation == null || (c.provisional && settings.hasTranslateKey));
 
   int get _translatedCount =>
       cues.where((c) => c.translation != null && !_wantsTranslation(c)).length;
@@ -1165,8 +1166,8 @@ class SubtitleJob extends ChangeNotifier {
     kickVocab(); // 학습 단어도 같은 시점에 (켜져 있을 때만)
     if (_dbg('DUALCUE_NO_TRANSLATE')) return;
     if (!_needsTranslation) return;
-    if (!settings.hasClaudeKey) {
-      notice = '설정(⚙)에서 Claude API 키를 등록하면 한국어 번역이 표시됩니다';
+    if (!settings.hasTranslateKey) {
+      notice = '설정(⚙)에서 ${settings.provider.label} API 키를 등록하면 한국어 번역이 표시됩니다';
       if (!_disposed) notifyListeners();
       return;
     }
@@ -1203,7 +1204,7 @@ class SubtitleJob extends ChangeNotifier {
       stage == JobStage.done &&
       sourceLang != 'ko' &&
       cues.isNotEmpty &&
-      settings.hasClaudeKey;
+      settings.hasTranslateKey;
 
   /// 원문은 그대로 두고 AI로 다시 번역한다. 새 번역이 온 줄부터 바뀐다.
   Future<void> retranslate() async {
@@ -1219,10 +1220,7 @@ class SubtitleJob extends ChangeNotifier {
   }
 
   Future<void> _translateLoop({bool nearOnly = false}) async {
-    final tr = ClaudeTranslator(
-      apiKey: settings.claudeApiKey,
-      model: settings.claudeModel,
-    );
+    final tr = createTranslator(settings);
     try {
       while (!_disposed) {
         final pending = _pendingByPriority(nearOnly: nearOnly);
@@ -1249,7 +1247,7 @@ class SubtitleJob extends ChangeNotifier {
           final done = _translatedCount;
           _set(
             JobStage.translating,
-            '번역 중 $done/${cues.length} · ${settings.claudeModel.label}',
+            '번역 중 $done/${cues.length} · ${settings.translateModelLabel}',
             done / cues.length,
           );
         }
@@ -1305,8 +1303,8 @@ class SubtitleJob extends ChangeNotifier {
     if (!settings.showVocab || sourceLang == 'ko') return;
     if (_dbg('DUALCUE_NO_TRANSLATE')) return;
     if (_vocabLoop != null || _vocabPending().isEmpty) return;
-    if (!settings.hasClaudeKey) {
-      notice = '설정(⚙)에서 Claude API 키를 등록하면 학습 단어가 표시됩니다';
+    if (!settings.hasTranslateKey) {
+      notice = '설정(⚙)에서 ${settings.provider.label} API 키를 등록하면 학습 단어가 표시됩니다';
       if (!_disposed) notifyListeners();
       return;
     }
@@ -1317,10 +1315,7 @@ class SubtitleJob extends ChangeNotifier {
   }
 
   Future<void> _vocabRun() async {
-    final tr = ClaudeTranslator(
-      apiKey: settings.claudeApiKey,
-      model: settings.claudeModel,
-    );
+    final tr = createTranslator(settings);
     try {
       while (!_disposed && settings.showVocab) {
         final pending = _vocabPending();

@@ -938,7 +938,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     },
   };
 
-  /// 학습 단어 켜기/끄기 (켜져 있을 때만 Claude로 단어를 만든다)
+  /// 학습 단어 켜기/끄기 (켜져 있을 때만 AI로 단어를 만든다)
   Future<void> _toggleVocab() async {
     final on = !_settings.showVocab;
     setState(() {
@@ -1323,10 +1323,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
         ),
         _menuDivider,
         IconButton(
-          tooltip: '설정 (Claude API 키)',
+          tooltip: '설정 (번역 API 키)',
           icon: Icon(
             Icons.settings,
-            color: _settings.hasClaudeKey ? null : Colors.amber,
+            color: _settings.hasTranslateKey ? null : Colors.amber,
           ),
           onPressed: _openSettings,
         ),
