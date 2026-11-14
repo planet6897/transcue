@@ -20,6 +20,9 @@ add_executable(${BINARY_NAME} WIN32
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
+# 소스에 한글 주석이 있다. 한국어 Windows(코드 페이지 949)에서 /WX와 겹쳐 C4819로 빌드가 깨지지 않게
+# 소스를 UTF-8로 읽는다.
+target_compile_options(${BINARY_NAME} PRIVATE /utf-8)
 
 # Add preprocessor definitions for the build version.
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
