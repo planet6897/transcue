@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+### 추가
+- Linux 지원 (x64, Debian·Ubuntu 계열에서 빌드). 필요한 패키지와 외부 도구(ffmpeg, yt-dlp, whisper.cpp)는
+  `scripts/setup-linux.sh`가 설치한다. GitHub Release에 `transcue-X.Y.Z-linux-x64.tar.gz`가 붙는다
+- macOS·Windows·Linux: 브라우저의 YouTube 링크(주소 표시줄·탭·영상 링크)를 창 위에 끌어다 놓으면 그 영상을
+  이중 자막으로 재생한다. 동영상 파일을 끌어다 놓아도 열린다
+
 ### 수정
 - macOS: 마우스 휠로 소리·화면 밝기를 조절할 때 방향이 반대이던 문제. 시스템의 "자연스러운 스크롤"이
   켜져 있으면 휠 방향이 뒤집혀 오는데 그대로 쓰고 있었다. 이제 휠을 위로 굴리면 올라간다

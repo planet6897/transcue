@@ -220,7 +220,8 @@ class YtDlp implements YoutubeBackend {
     if (exe == null) {
       throw const YtDlpException(
         'yt-dlp를 찾을 수 없습니다.\n'
-        'macOS: brew install yt-dlp\nWindows: winget install yt-dlp',
+        'macOS: brew install yt-dlp\nWindows: winget install yt-dlp\n'
+        'Linux: scripts/setup-linux.sh',
       );
     }
     return exe;

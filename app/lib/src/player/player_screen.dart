@@ -22,6 +22,7 @@ import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
 import '../pipeline/tools.dart';
+import 'dropped_link.dart';
 import 'file_browser.dart';
 import 'online_queue.dart';
 import 'play_counts.dart';
@@ -164,6 +165,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void initState() {
     super.initState();
     unawaited(refreshNaturalScroll());
+    _dropChannel.setMethodCallHandler((call) async {
+      if (call.method != 'drop') return;
+      final items = (call.arguments as List).cast<String>();
+      if (mounted) await _onDrop(items);
+    });
     unawaited(
       detectTv().then((tv) {
         if (!mounted) return;
@@ -223,6 +229,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    _dropChannel.setMethodCallHandler(null);
     _completedSub?.cancel();
     _sentenceLoopSub?.cancel();
     _playingSub?.cancel();
@@ -313,6 +320,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _view.cues = const [];
     setState(() => _job = job);
     unawaited(job.run());
+  }
+
+  /// 창 위에 끌어다 놓기 (데스크톱). macOS는 MainFlutterWindow.swift, Windows는
+  /// drop_target.cpp, Linux는 my_application.cc가 놓은 것을 알려 준다.
+  static const _dropChannel = MethodChannel('transcue/drop');
+
+  /// 브라우저에서 끌어 온 YouTube 링크나 동영상 파일을 연다
+  Future<void> _onDrop(List<String> items) async {
+    if (kDebugMode) debugPrint('[drop] $items');
+    final (:youtube, :file) = pickDropped(items);
+    if (youtube == null && file == null) {
+      _toast('YouTube 링크나 동영상 파일만 열 수 있습니다');
+      return;
+    }
+    if (_loading) return;
+    // 다른 화면(채널 목록·설정 등)이 떠 있으면 닫고 연다
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    if (youtube != null) {
+      await _openYoutubeUrl(youtube);
+    } else {
+      await _openPath(file!);
+    }
   }
 
   Future<void> _openFile() async {
