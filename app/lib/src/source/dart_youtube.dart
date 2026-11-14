@@ -39,7 +39,7 @@ class DartYoutube implements YoutubeBackend {
     if (id == null) throw YtDlpException('YouTube 링크가 아닙니다: $url');
     final (video, manifest, captions) = await (
       _yt.videos.get(id),
-      _yt.videos.streams.getManifest(id),
+      _manifest(id),
       _yt.videos.closedCaptions.getManifest(id),
     ).wait;
     final (v, a) = pickStreams(manifest);
@@ -64,6 +64,22 @@ class DartYoutube implements YoutubeBackend {
     );
   }
 
+  /// 영상·소리 주소. visionOS 클라이언트를 먼저 쓴다: 라이브러리 기본(ANDROID)이 주는
+  /// 주소는 PO 토큰이 없으면 파일 앞 몇 MB만 받아지고 그 뒤는 403이라, 플레이어가
+  /// 열지 못한다 (2026-11 실측, TED 영상). '아동용' 영상 등 visionOS로 안 되면 기본으로.
+  Future<yte.StreamManifest> _manifest(String id) async {
+    try {
+      final m = await _yt.videos.streams.getManifest(
+        id,
+        ytClients: [visionOsClient],
+      );
+      if (m.videoOnly.isNotEmpty || m.muxed.isNotEmpty) return m;
+    } on Exception {
+      // 아래 기본 클라이언트로
+    }
+    return _yt.videos.streams.getManifest(id);
+  }
+
   @override
   Future<String> fetchCaption(YoutubeMedia media, CaptionTrack track) async {
     final client = HttpClient();
@@ -82,7 +98,38 @@ class DartYoutube implements YoutubeBackend {
   }
 }
 
-/// 재생할 스트림: 영상만 있는 mp4(1080p 이하, H.264 우선) + 소리만 있는 mp4.
+const _visionOsUserAgent =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 '
+    '(KHTML, like Gecko) Version/26.0 Safari/605.1.15';
+
+/// YouTube visionOS 앱 클라이언트 (yt-dlp 2026.10.26의 `visionos`와 같은 값).
+/// 서명 해독이 필요 없고, 받은 주소를 PO 토큰 없이 끝까지 받을 수 있다.
+const visionOsClient = yte.YoutubeApiClient(
+  {
+    'context': {
+      'client': {
+        'clientName': 'VISIONOS',
+        'clientVersion': '1.02',
+        'deviceMake': 'Apple',
+        'deviceModel': 'RealityDevice17,1',
+        'userAgent': _visionOsUserAgent,
+        'osName': 'visionOS',
+        'osVersion': '26.5.23O471',
+        'hl': 'en',
+        'timeZone': 'UTC',
+        'utcOffsetMinutes': 0,
+      },
+    },
+  },
+  'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+  headers: {
+    'User-Agent': _visionOsUserAgent,
+    'X-YouTube-Client-Name': '101',
+    'X-YouTube-Client-Version': '1.02',
+  },
+);
+
+/// 재생할 스트림:영상만 있는 mp4(1080p 이하, H.264 우선) + 소리만 있는 mp4.
 /// 없으면 영상·소리가 합쳐진 스트림. (영상, 소리 또는 null)
 (yte.StreamInfo, yte.StreamInfo?) pickStreams(
   yte.StreamManifest m, {
