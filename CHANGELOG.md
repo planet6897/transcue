@@ -5,7 +5,11 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-15
+
 ### 추가
+- macOS: 터미널 한 줄로 설치 (`scripts/install-macos.sh`). 앱에 Apple 서명·공증이 없어 브라우저로 받은 zip은
+  macOS가 열지 못하게 막는데, 이 방법으로 설치하면 경고 없이 열린다
 - Linux 지원 (x64, Debian·Ubuntu 계열에서 빌드). 필요한 패키지와 외부 도구(ffmpeg, yt-dlp, whisper.cpp)는
   `scripts/setup-linux.sh`가 설치한다. GitHub Release에 `transcue-X.Y.Z-linux-x64.tar.gz`가 붙는다
 - macOS·Windows·Linux: 브라우저의 YouTube 링크(주소 표시줄·탭·영상 링크)를 창 위에 끌어다 놓으면 그 영상을

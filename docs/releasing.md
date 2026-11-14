@@ -50,8 +50,10 @@ CI가 PR마다 macOS를 release로 빌드해 앱 안의 모든 실행 파일·�
 
 - Android APK는 아직 debug 키로 서명한다 (`app/android/app/build.gradle.kts`). 정식 배포 전에 배포용 키를 만들어야 한다.
 - Windows는 설치본 없이 zip으로 배포한다 (Release 폴더 전체를 풀어 `transcue.exe` 실행).
-- macOS 앱은 아직 Apple 개발자 서명·공증을 하지 않았다. 처음 열 때 "확인되지 않은 개발자" 경고가 나오면
-  Finder에서 Control-클릭 → 열기. 정식 배포 전에 서명·공증이 필요하다.
+- macOS 앱은 아직 Apple 개발자 서명·공증을 하지 않았다 (임시 서명만). 브라우저로 받은 zip은 macOS가 막으므로
+  터미널 설치를 안내한다: `curl -fsSL https://raw.githubusercontent.com/planet6897/transcue/main/scripts/install-macos.sh | bash`
+  (curl로 받은 파일은 "인터넷에서 받음" 표시가 없어 그대로 열린다). 이미 브라우저로 받았으면
+  `xattr -cr /Applications/Transcue.app`. 경고를 완전히 없애려면 서명·공증이 필요하다 (#24).
 - Linux는 설치본 없이 tar.gz로 배포한다 (풀어서 `transcue` 실행). 앱에 libmpv를 넣지 않으므로 쓰는 PC에
   mpv 라이브러리가 있어야 한다 (`sudo apt install libmpv2` 또는 `mpv`). 빌드한 Ubuntu보다 오래된 배포판에서는
   실행되지 않을 수 있다.
