@@ -163,6 +163,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited(refreshNaturalScroll());
     unawaited(
       detectTv().then((tv) {
         if (!mounted) return;
@@ -1017,7 +1018,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 영상 위에서 휠: 오른쪽 절반은 소리, 왼쪽 절반은 밝기 (Android 위/아래 밀기와 같은 배치)
   void _onWheel(PointerSignalEvent e, double width) {
     if (e is! PointerScrollEvent) return;
-    final step = wheelStep(e.scrollDelta);
+    final step = wheelStep(e.scrollDelta, natural: naturalScroll);
+    unawaited(refreshNaturalScroll());
     if (step == 0) return;
     // 같은 휠 입력을 다른 곳(목록 스크롤 등)과 나눠 처리하지 않게 한 곳만 받는다
     GestureBinding.instance.pointerSignalResolver.register(e, (_) {

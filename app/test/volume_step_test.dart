@@ -36,6 +36,9 @@ void main() {
     expect(wheelStep(const Offset(0, 53.3)), -1);
     // 가로 스크롤만 있으면 무시
     expect(wheelStep(const Offset(40, 0)), 0);
+    // macOS 자연스러운 스크롤: 시스템이 뒤집어 보낸 방향을 되돌린다
+    expect(wheelStep(const Offset(0, 100), natural: true), 1);
+    expect(wheelStep(const Offset(0, -100), natural: true), -1);
   });
 
   group('TrackpadSteps (트랙패드 두 손가락 밀기)', () {
