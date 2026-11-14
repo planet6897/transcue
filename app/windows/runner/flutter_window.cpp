@@ -1,5 +1,7 @@
 #include "flutter_window.h"
 
+#include <flutter/standard_method_codec.h>
+
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
@@ -27,6 +29,23 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  // 브라우저에서 끌어 온 링크(YouTube)나 동영상 파일을 창 위에 놓으면 연다
+  drop_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "transcue/drop",
+          &flutter::StandardMethodCodec::GetInstance());
+  ::OleInitialize(nullptr);
+  drop_target_ = new DropTarget([this](const std::vector<std::string>& items) {
+    flutter::EncodableList list;
+    for (const std::string& item : items) {
+      list.push_back(flutter::EncodableValue(item));
+    }
+    drop_channel_->InvokeMethod(
+        "drop", std::make_unique<flutter::EncodableValue>(list));
+    ::SetForegroundWindow(GetHandle());
+  });
+  ::RegisterDragDrop(GetHandle(), drop_target_);
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -40,6 +59,13 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (drop_target_) {
+    ::RevokeDragDrop(GetHandle());
+    drop_target_->Release();
+    drop_target_ = nullptr;
+    ::OleUninitialize();
+  }
+  drop_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
