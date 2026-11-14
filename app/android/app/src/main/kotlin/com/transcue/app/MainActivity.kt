@@ -23,6 +23,15 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         WhisperBridge(flutterEngine.dartExecutor.binaryMessenger)
+        // TV(리모컨으로만 조작)인지: 앱이 메뉴에 포커스를 주고 방향키로 움직이게 한다
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "transcue/device")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "isTv") {
+                    result.success(packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK))
+                } else {
+                    result.notImplemented()
+                }
+            }
         // 화면 위/아래로 밀어 소리 조절: 기기 미디어 음량 (볼륨 버튼과 같은 값, 0~1)
         val audio = getSystemService(AUDIO_SERVICE) as AudioManager
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "transcue/volume")
