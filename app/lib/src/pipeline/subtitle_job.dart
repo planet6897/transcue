@@ -166,6 +166,9 @@ class SubtitleJob extends ChangeNotifier {
   /// 조각 끝에서 문장이 잘리지 않도록 더 읽는 시간
   static const _tailMs = 4000;
 
+  /// Android에서 재생 위치보다 이만큼 넘게 앞은 미리 인식하지 않는다
+  static const _androidAheadMs = 3 * 60 * 1000;
+
   // ---- 진행 상태 ----
 
   void _set(JobStage s, String msg, [double? p]) {
@@ -1100,6 +1103,17 @@ class SubtitleJob extends ChangeNotifier {
             _firstGap(_sttFrom(playhead() + _lead, total), total) ??
             _firstGap(0, total);
         if (start == null) break;
+        // Android: 재생 위치에서 먼 곳(3분 넘게 앞이거나 지나간 곳)은 미리 인식하지 않고 쉰다.
+        // 인식이 빠른 코어를 모두 쓰는 동안 영상 디코딩이 밀려 소리와 입 모양이 어긋났다
+        // (갤럭시 탭 S9, 로컬 파일을 재생 위치보다 10분 넘게 앞까지 쉬지 않고 인식).
+        // 재생 위치를 옮기면 다음 확인(2초 뒤)에 그곳부터 인식한다.
+        if (Platform.isAndroid) {
+          final ph = playhead().inMilliseconds;
+          if (start > ph + _leadMs + _androidAheadMs || start < ph - 2000) {
+            await Future<void>.delayed(const Duration(seconds: 2));
+            continue;
+          }
+        }
         // 앞에서 시작할 때는 짧은 조각이 도움이 안 된다 (받기·인식에 길이와 상관없이 드는 시간이 크다)
         final jumped =
             _leadMs == 0 && (lastEnd == null || (start - lastEnd).abs() > 1000);
