@@ -150,6 +150,12 @@ Future<File> ensureWhisperModel(
   onProgress: onProgress,
 );
 
+/// 이미 받아 둔 모델 파일. 없거나 받다 만 것이면 null (받지는 않는다).
+Future<File?> whisperModelIfPresent(WhisperModel m) async {
+  final f = File('${(await AppSettings.supportDir()).path}/models/${m.file}');
+  return await f.exists() && await f.length() == m.bytes ? f : null;
+}
+
 Future<File> ensureVadModel() => ensureModelFile(_vadFile, _vadUrl);
 
 final _segLine = RegExp(

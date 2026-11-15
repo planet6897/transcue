@@ -35,13 +35,24 @@ Stream<SttEvent> transcribeRange({
 
   /// 있으면 whisper 대신 Parakeet으로 인식한다 (영어로 확인된 구간)
   File? parakeetModel,
+
+  /// Android에서 쓸 스레드 수. 생략하면 빠른 코어 수 (재생에 부담을 덜 주려 할 때 낮춘다)
+  int? threads,
 }) async* {
   if (Platform.isAndroid) {
     if (parakeetModel != null) {
       yield* _parakeetAndroid(input, start, length, parakeetModel);
       return;
     }
-    yield* _transcribeAndroid(input, start, length, model, vadModel, language);
+    yield* _transcribeAndroid(
+      input,
+      start,
+      length,
+      model,
+      vadModel,
+      language,
+      threads,
+    );
     return;
   }
   final wav = '${tmp.path}/chunk.wav';
@@ -134,8 +145,9 @@ Stream<SttEvent> _transcribeAndroid(
   Duration length,
   File model,
   File? vad,
-  String language,
-) async* {
+  String language, [
+  int? threads,
+]) async* {
   final r = await _channel.invokeMapMethod<String, Object?>('transcribe', {
     'path': path,
     'startMs': start.inMilliseconds,
@@ -143,7 +155,8 @@ Stream<SttEvent> _transcribeAndroid(
     'model': model.path,
     'vad': vad?.path,
     'lang': language,
-    // threads: 생략 → 빠른 코어 수 (WhisperBridge.bigCores)
+    // 생략 → 빠른 코어 수 (WhisperBridge.bigCores)
+    'threads': ?threads,
   });
   debugPrint(
     '[stt] android ${start.inSeconds}s+${length.inSeconds}s: '
