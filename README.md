@@ -28,6 +28,18 @@
 
 음성 인식·YouTube에는 외부 도구(ffmpeg, whisper.cpp, yt-dlp)가 필요하다 (아래 개발 환경의 설치 명령 참고).
 
+## 사용법
+
+영상을 여는 방법:
+
+- **동영상 파일**: 메뉴의 동영상 열기 버튼으로 고르거나, 파일을 앱 창 위에 끌어다 놓는다.
+- **YouTube**: 메뉴의 YouTube 열기 버튼을 누르고 주소를 붙여 넣는다.
+  또는 **브라우저에서 YouTube 링크를 끌어서 앱 창 위에 놓는다** (주소창의 주소, 영상 썸네일·제목 링크 모두 된다).
+  다른 영상을 보는 중에 놓아도 바로 그 영상으로 바뀐다.
+- **영어 강연·학습 채널**: 메뉴의 채널 버튼에서 TED·BBC·VOA 영상을 골라 연다.
+
+끌어다 놓기는 macOS·Windows·Linux에서 된다.
+
 ## 개발 환경
 
 필요: Flutter 3.41+, 외부 도구 `brew install ffmpeg whisper-cpp yt-dlp` (Windows: `powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1`, Linux: `bash scripts/setup-linux.sh`), Rust 1.93 (`rust-toolchain.toml`로 고정), Xcode(macOS) / Visual Studio 2022 C++ 워크로드(Windows) / clang·cmake·ninja·GTK 3·libmpv(Linux, `setup-linux.sh`가 함께 설치)
