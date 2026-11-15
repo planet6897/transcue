@@ -1,3 +1,4 @@
+import 'dart:ffi' show Abi;
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -10,15 +11,22 @@ import 'subsync.dart';
 import 'tools.dart';
 import 'whisper.dart';
 
+/// Android에서 앱에 내장한 whisper.cpp가 실제로 들어 있는지.
+/// 64비트 ARM만 빌드하고 나머지 ABI는 빈 구현(늘 결과 없음)이다. Chromecast with Google TV처럼
+/// 칩은 64비트여도 32비트 Android(armeabi-v7a)로 도는 기기가 있어, 지금 프로세스의 ABI로 본다.
+/// 빈 구현에 맡기면 30초 소리를 디코딩하느라 CPU·메모리만 쓰고 아무것도 얻지 못한다.
+final bool _androidSpeech =
+    Platform.isAndroid && Abi.current() == Abi.androidArm64;
+
 /// 이 기기에서 음성 인식을 할 수 있는지
-/// (데스크톱: ffmpeg + whisper-cli, Android: 앱에 내장한 whisper.cpp)
-final bool canTranscribe = hasDesktopTools || Platform.isAndroid;
+/// (데스크톱: ffmpeg + whisper-cli, Android: 앱에 내장한 whisper.cpp, 64비트 ARM만)
+final bool canTranscribe = hasDesktopTools || _androidSpeech;
 
 const _channel = MethodChannel('transcue/whisper');
 
 /// 영어 구간을 Parakeet으로 인식할 수 있는지. 데스크톱은 parakeet-cli(whisper.cpp 배포본),
 /// Android는 앱에 함께 빌드한 whisper.cpp의 Parakeet(JNI)을 쓴다.
-final bool canUseParakeet = hasDesktopTools || Platform.isAndroid;
+final bool canUseParakeet = hasDesktopTools || _androidSpeech;
 
 /// 영상 [input]의 [start]부터 [length]만큼 받아 적는다.
 /// 큐 시간은 [start] 기준(0부터). 소리가 없으면(영상 끝) [SttEnd].
@@ -81,7 +89,7 @@ Stream<SttEvent> transcribeRange({
 }
 
 /// 이 기기에서 말소리 구간을 찾을 수 있는지 (재생 중 싱크 확인)
-final bool canDetectSpeech = hasDesktopTools || Platform.isAndroid;
+final bool canDetectSpeech = hasDesktopTools || _androidSpeech;
 
 /// 영상 [input]의 [start]부터 [length] 사이 말소리 구간 (밀리초, [start] 기준).
 /// 소리가 없으면(영상 끝) 빈 목록.

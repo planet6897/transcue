@@ -587,6 +587,8 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
           v.thumbnailUrl,
           width: 112,
           height: 63,
+          // 320×180 원본을 그대로 풀지 않고 보이는 크기로 풀어 메모리를 아낀다
+          cacheWidth: (112 * MediaQuery.devicePixelRatioOf(context)).round(),
           fit: BoxFit.cover,
           errorBuilder: (_, _, _) => const SizedBox(
             width: 112,

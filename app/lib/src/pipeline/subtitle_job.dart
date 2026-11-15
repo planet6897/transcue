@@ -1025,7 +1025,7 @@ class SubtitleJob extends ChangeNotifier {
   Future<void> _speechToText() async {
     if (!canTranscribe) {
       originalFrom = '자막 없음';
-      notice = '이 기기에서는 아직 음성 인식을 지원하지 않습니다 (인터넷 자막만 사용)';
+      notice = '이 기기에서는 음성 인식을 지원하지 않습니다 (인터넷 자막만 사용)';
       return;
     }
     final model = await ensureWhisperModel(

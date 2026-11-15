@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
@@ -6,6 +8,10 @@ import 'src/player/player_screen.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  // 이미지 캐시 기본 100MB는 메모리 2GB인 TV 기기에 크다 (그리는 이미지는 썸네일 정도)
+  if (Platform.isAndroid) {
+    PaintingBinding.instance.imageCache.maximumSizeBytes = 24 << 20;
+  }
   runApp(const TranscueApp());
 }
 
