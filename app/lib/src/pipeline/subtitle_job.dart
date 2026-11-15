@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../online/opensubtitles.dart';
 import '../player/resume.dart' show formatPosition;
+import '../player/tv.dart' show tvDevice;
 import '../settings/app_settings.dart';
 import '../source/youtube_backend.dart';
 import '../source/yt_dlp.dart';
@@ -17,6 +18,7 @@ import 'media_tools.dart';
 import 'speech_check.dart';
 import 'stt_engine.dart';
 import 'subsync.dart';
+import 'text_sync.dart';
 import 'tools.dart';
 import 'whisper.dart';
 
@@ -73,6 +75,19 @@ String mergeSpokenLang(String? current, String detected) =>
 /// 보통 재생(빠르게 재생 포함)·일시정지는 3초 넘게 차이 나지 않는다.
 bool isSeek(Duration moved, Duration elapsed) =>
     (moved - elapsed).abs() > const Duration(seconds: 3);
+
+/// 시작할 때 싱크를 재는 방법: 한 번에 받아 적는 길이, 근거가 모자랄 때 다음 구간으로
+/// 옮겨 다시 재는 횟수, Android에서 쓸 스레드 수(null = 빠른 코어 전부).
+///
+/// Android는 받아 적기가 느려(태블릿: 30초에 30~60초) 짧게 한 번만 잰다. 30초면 근거가
+/// 40~80개쯤 나와 판정(최소 12개)에는 충분하다. TV는 CPU가 약해 재생이 끊기지 않게
+/// 스레드를 2개만 쓴다 (Chromecast는 코어 4개가 모두 같은 속도라 기본값이 4개 전부).
+({Duration window, int tries, int? threads}) startSyncPlan({
+  required bool android,
+  required bool tv,
+}) => android
+    ? (window: const Duration(seconds: 30), tries: 1, threads: tv ? 2 : null)
+    : (window: const Duration(seconds: 60), tries: 3, threads: null);
 
 class SubtitleJob extends ChangeNotifier {
   SubtitleJob({
@@ -368,6 +383,8 @@ class SubtitleJob extends ChangeNotifier {
         }
       }
       unawaited(_liveSyncLoop());
+      // YouTube 자막은 번역과 동시에 음성과 대조해 밀린 만큼 옮긴다
+      if (_needsStartSync) unawaited(_startSync());
       await translateRemaining();
       if (stage != JobStage.failed) {
         _set(JobStage.done, _summary());
@@ -638,6 +655,87 @@ class SubtitleJob extends ChangeNotifier {
     manualOffset += d;
     _setCues(shiftCues(cues, d));
     await _saveCache();
+  }
+
+  // ---- 시작할 때 싱크 (YouTube 자막) ----
+
+  static const _syncUnknown = '싱크 확인 불가';
+
+  /// YouTube에 올라온 자막은 영상과 다른 판본 기준일 수 있다
+  /// (실사례: TED 강연 자막이 인트로 없는 판본 기준이라 처음부터 끝까지 18.6초 빠름).
+  /// 음성 인식 자막은 같은 소리에서 시간을 얻었으므로 확인하지 않는다.
+  bool get _needsStartSync =>
+      source is YoutubeSource &&
+      canTranscribe &&
+      originalFrom != fromStt &&
+      syncInfo == null &&
+      cues.isNotEmpty &&
+      !_dbg('DUALCUE_NO_VERIFY');
+
+  /// 재생 위치부터 1분(Android 30초)을 받아 적어 자막과 같은 말이 나오는 시각을 비교하고,
+  /// 자막 전체가 밀려 있으면 그만큼 옮긴다. 실패해도 자막은 그대로 쓴다.
+  Future<void> _startSync() async {
+    final media = (source as YoutubeSource).media;
+    final plan = startSyncPlan(android: Platform.isAndroid, tv: tvDevice);
+    // Android는 싱크 확인만 하려고 큰 모델을 받지 않는다. 받아 둔 뒤에 열 때 확인한다
+    final model = Platform.isAndroid
+        ? await whisperModelIfPresent(settings.whisperModel)
+        : await ensureWhisperModel(settings.whisperModel);
+    if (model == null) {
+      debugPrint('[start-sync] skipped: speech model not downloaded');
+      return;
+    }
+    final tmp = await Directory.systemTemp.createTemp('transcue_start_');
+    try {
+      final vad = await ensureVadModel();
+      final total = media.duration;
+      TextOffset? found;
+      var from = playhead();
+      for (var i = 0; i < plan.tries && found == null; i++) {
+        if (_disposed) return;
+        if (total != null && total > Duration.zero && from >= total) break;
+        final spoken = <BilingualCue>[];
+        await for (final ev in transcribeRange(
+          input: media.audioUrl ?? media.videoUrl,
+          httpHeaders: media.httpHeaders,
+          start: from,
+          length: plan.window,
+          model: model,
+          vadModel: vad,
+          language: sourceLang ?? 'auto',
+          tmp: tmp,
+          threads: plan.threads,
+        )) {
+          if (ev is SttCue) spoken.add(ev.cue);
+        }
+        found = estimateTextOffset(shiftCues(spoken, from), cues);
+        debugPrint(
+          '[start-sync] at ${from.inSeconds}s: '
+          '${found == null ? 'undecided' : '${found.describe()} (${found.matches})'}',
+        );
+        from += plan.window;
+      }
+      // 재는 동안 사용자가 직접 맞췄으면 건드리지 않는다
+      if (_disposed || manualOffset != Duration.zero) return;
+      if (found == null) {
+        syncInfo = _syncUnknown;
+      } else if (found.significant) {
+        _setCues(shiftCues(cues, found.offset));
+        syncInfo = '싱크 자동 보정 ${found.describe()}';
+      } else {
+        syncInfo = '싱크 정상';
+      }
+      await _saveCache();
+      if (stage == JobStage.done) {
+        _set(JobStage.done, _summary());
+      } else if (!_disposed) {
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('start sync failed: $e'); // 다음에 열 때 다시 확인한다
+    } finally {
+      await deleteTempDir(tmp);
+    }
   }
 
   // ---- 실시간 싱크 ----
