@@ -146,6 +146,59 @@ void main() {
       expect(m.korean, isNull);
     });
 
+    test('영상 정보의 언어가 틀려도 자동 자막(-orig)의 음성 언어를 따른다', () {
+      final m = YoutubeMedia.fromInfoJson({
+        ...info,
+        'language': 'es',
+        'subtitles': {'es': subs('es-manual')},
+      });
+      expect(m.language, 'en');
+      expect(m.original?.url, 'https://subs/en-orig.vtt');
+    });
+
+    test('음성 언어를 모르면 다른 언어 자막을 원어로 쓰지 않는다 (음성 인식으로)', () {
+      final m = YoutubeMedia.fromInfoJson({
+        ...info,
+        'language': null,
+        'subtitles': {'es': subs('es')},
+        'automatic_captions': <String, dynamic>{},
+      });
+      expect(m.original, isNull);
+      expect(m.korean, isNull);
+    });
+
+    test('자동 더빙 소리 트랙이 있으면 원본 음성을 고른다', () {
+      Map<String, dynamic> audio(
+        String id,
+        String note,
+        String lang,
+        num pref,
+      ) => {
+        ...fmt(id, a: 'mp4a', tbr: 130),
+        'format_note': note,
+        'language': lang,
+        'language_preference': pref,
+      };
+      final m = YoutubeMedia.fromInfoJson({
+        ...info,
+        'formats': [
+          fmt('137', h: 1080, v: 'avc1', tbr: 4000),
+          audio('140-0', 'Spanish (dubbed-auto), medium', 'es', -1),
+          audio('140-1', 'English original (default), medium', 'en', 10),
+          {
+            ...audio('140-2', 'German (dubbed-auto), high', 'de', -1),
+            'tbr': 200,
+          },
+        ],
+        'language': null,
+        'automatic_captions': <String, dynamic>{},
+        'subtitles': {'en': subs('en'), 'de': subs('de')},
+      });
+      expect(m.audioUrl, 'https://cdn/140-1');
+      expect(m.language, 'en');
+      expect(m.original?.url, 'https://subs/en.vtt');
+    });
+
     test('재생 가능한 포맷이 없으면 예외', () {
       expect(
         () => YoutubeMedia.fromInfoJson({'id': 'x', 'formats': []}),

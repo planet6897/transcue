@@ -61,5 +61,56 @@ void main() {
     test('자막이 전혀 없으면 둘 다 없음 (음성 인식으로)', () {
       expect(pickCaptions(const []), (null, null, null));
     });
+
+    test('원어는 자동 자막의 언어(음성)를 따른다: 사람이 단 영어가 있어도 일본어 영상이면 일본어', () {
+      final (o, k, lang) = pickCaptions([t('en'), t('ja', auto: true)]);
+      expect(o?.lang, 'ja');
+      expect(o?.auto, isTrue);
+      expect(lang, 'ja');
+    });
+
+    test('자동 더빙 영상: 자동 자막이 언어마다 있으면 원본 소리 트랙 언어를 원어로', () {
+      final tracks = [
+        t('ar', auto: true),
+        t('en', auto: true),
+        t('ko', auto: true),
+      ];
+      final (o, k, lang) = pickCaptions(tracks, spoken: 'en');
+      expect(o?.lang, 'en');
+      expect(lang, 'en');
+      expect(k, isNull);
+      // 원본 언어를 모르면 아무것도 고르지 않는다 (음성 인식으로)
+      expect(pickCaptions(tracks), (null, null, null));
+    });
+
+    test('원본 언어 자막이 없으면 원어 없음 (음성 인식으로)', () {
+      final (o, _, lang) = pickCaptions([t('ar'), t('fr')], spoken: 'en');
+      expect(o, isNull);
+      expect(lang, 'en');
+    });
+
+    test('원본 소리 트랙의 언어', () {
+      expect(
+        originalAudioLanguage('en-US.4', 'English (United States) original'),
+        'en',
+      );
+      expect(originalAudioLanguage('ar.3', 'Arabic (dubbed-auto)'), isNull);
+      expect(originalAudioLanguage(null, null), isNull);
+    });
+
+    test('원본 음성 트랙 알아보기', () {
+      expect(isOriginalAudio(null), isTrue); // 트랙이 하나뿐
+      expect(isOriginalAudio('English (United States) original'), isTrue);
+      expect(
+        isOriginalAudio('Español (dubbed-auto)', isDefault: true),
+        isFalse,
+      );
+      expect(isOriginalAudio('Deutsch'), isFalse);
+      expect(isOriginalAudio('English', isDefault: true), isTrue);
+    });
+
+    test('자동 자막이 없으면 음성 언어를 몰라 다른 언어 자막을 원어로 쓰지 않는다', () {
+      expect(pickCaptions([t('es'), t('en'), t('ko')]), (null, null, null));
+    });
   });
 }

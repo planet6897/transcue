@@ -1294,7 +1294,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// TV(Android TV·Google TV)인지. 리모컨 방향키로만 조작하므로 메뉴에 포커스를 준다.
   bool _tv = false;
 
-  /// 재생 중 TV 메뉴를 보이는지 (↑/↓로 열고, 뒤로 버튼이나 8초 뒤 닫힌다)
+  /// 재생 중 TV 메뉴를 보이는지 (↑/↓·뒤로 버튼으로 열고, 8초 뒤 닫힌다. 떠 있을 때 뒤로 버튼은 앱 종료)
   final _tvMenuShown = ValueNotifier<bool>(false);
   Timer? _tvMenuTimer;
 
@@ -1324,14 +1324,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _restartTvMenuTimer() {
     _tvMenuTimer?.cancel();
     if (!_opened) return;
-    _tvMenuTimer = Timer(const Duration(seconds: 8), _hideTvMenu);
+    _tvMenuTimer = Timer(const Duration(seconds: 8), () {
+      // 메뉴에서 연 창(최근 재생·TED 목록 등)을 고르는 중이면 닫지 않고 기다린다
+      if (_dialogOpen) {
+        _restartTvMenuTimer();
+      } else {
+        _hideTvMenu();
+      }
+    });
   }
 
-  /// TV: 메뉴를 닫고 포커스를 영상으로 (영상을 열기 전이면 포커스만 뺀다)
+  /// 이 화면 위에 창이 떠 있는지
+  bool get _dialogOpen =>
+      mounted && !(ModalRoute.of(context)?.isCurrent ?? true);
+
+  /// TV: 메뉴를 닫고 포커스를 영상으로 (영상을 열기 전이면 포커스만 뺀다).
+  /// 창이 떠 있으면 그 창의 포커스를 빼앗지 않는다 (실사례: 고르는 도중 포커스가 사라짐).
   void _hideTvMenu() {
     _tvMenuTimer?.cancel();
     _tvMenuShown.value = false;
-    if (mounted) _mainFocus.requestFocus();
+    if (mounted && !_dialogOpen) _mainFocus.requestFocus();
   }
 
   /// 재생 중 TV 메뉴: 상단 줄(제목·진행·메뉴)을 영상 위에 띄운다
@@ -1569,14 +1581,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // TV 리모컨 뒤로: 재생 중 메뉴가 떠 있으면 앱을 닫지 않고 메뉴만 닫는다.
-    // (키 단축키로 잡으면 키 다운만 처리되고 키 업이 Android로 넘어가 앱이 닫힌다 — 실측)
+    // 뒤로 버튼. (키 단축키로 잡으면 키 다운만 처리되고 키 업이 Android로 넘어가 앱이 닫힌다 — 실측)
+    // - TV 재생 중: 메뉴가 없으면 메뉴를 열고, 메뉴가 떠 있을 때 한 번 더 누르면 앱을 닫는다
+    // - 그 밖: 메뉴가 떠 있으면 메뉴만 닫는다
     return ValueListenableBuilder<bool>(
       valueListenable: _tvMenuShown,
       builder: (context, menuShown, child) => PopScope(
-        canPop: !menuShown,
+        canPop: _tv && _opened ? menuShown : !menuShown,
         onPopInvokedWithResult: (didPop, _) {
-          if (!didPop) _hideTvMenu();
+          if (didPop) return;
+          if (_tv && _opened) {
+            _focusTvMenu();
+          } else {
+            _hideTvMenu();
+          }
         },
         child: child!,
       ),
