@@ -26,10 +26,17 @@ class MainActivity : FlutterActivity() {
         // TV(리모컨으로만 조작)인지: 앱이 메뉴에 포커스를 주고 방향키로 움직이게 한다
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "transcue/device")
             .setMethodCallHandler { call, result ->
-                if (call.method == "isTv") {
-                    result.success(packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK))
-                } else {
-                    result.notImplemented()
+                when (call.method) {
+                    "isTv" -> result.success(
+                        packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK),
+                    )
+                    "textInput" -> showTextInput(
+                        call.argument<String>("text") ?: "",
+                        call.argument<String>("hint") ?: "",
+                        call.argument<Boolean>("english") ?: false,
+                        result,
+                    )
+                    else -> result.notImplemented()
                 }
             }
         // 화면 위/아래로 밀어 소리 조절: 기기 미디어 음량 (볼륨 버튼과 같은 값, 0~1)
@@ -104,6 +111,56 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /// TV: 기본(Android) 입력창. Flutter 입력란에서는 리모컨 방향키가 앱으로 가서 화면 키보드
+    /// (Gboard)를 조작할 수 없다(실측). 기본 입력란에서는 키보드가 방향키를 받는다.
+    /// 입력한 글(검색 키·확인) 또는 취소하면 null.
+    private fun showTextInput(
+        text: String,
+        hint: String,
+        english: Boolean,
+        result: MethodChannel.Result,
+    ) {
+        var done = false
+        fun finish(value: String?) {
+            if (done) return
+            done = true
+            result.success(value)
+        }
+        val field = android.widget.EditText(this).apply {
+            setText(text)
+            setSelection(text.length)
+            this.hint = hint
+            isSingleLine = true
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            // 영어 검색: 키보드를 영어 배열로 (한글 배열이면 자모가 들어간다)
+            if (english && Build.VERSION.SDK_INT >= 24) {
+                imeHintLocales = android.os.LocaleList(java.util.Locale.ENGLISH)
+            }
+        }
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setView(
+                android.widget.FrameLayout(this).apply {
+                    val pad = (24 * resources.displayMetrics.density).toInt()
+                    setPadding(pad, pad, pad, 0)
+                    addView(field)
+                },
+            )
+            .setPositiveButton(android.R.string.ok) { _, _ -> finish(field.text.toString()) }
+            .setNegativeButton(android.R.string.cancel) { _, _ -> finish(null) }
+            .setOnDismissListener { finish(null) }
+            .create()
+        field.setOnEditorActionListener { _, _, _ ->
+            finish(field.text.toString())
+            dialog.dismiss()
+            true
+        }
+        dialog.window?.setSoftInputMode(
+            android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE,
+        )
+        dialog.show()
+        field.requestFocus()
     }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, grants: IntArray) {
