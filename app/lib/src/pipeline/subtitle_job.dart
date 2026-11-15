@@ -14,6 +14,7 @@ import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
 import '../subtitle/webvtt.dart';
 import '../translate/translators.dart';
+import 'audio_download.dart';
 import 'media_tools.dart';
 import 'speech_check.dart';
 import 'stt_engine.dart';
@@ -969,6 +970,11 @@ class SubtitleJob extends ChangeNotifier {
   String? _activeChunk;
   final _chunkWatch = Stopwatch();
 
+  /// 인식이 느린 기기에서 재생 위치보다 얼마나 앞에서 인식을 시작할지
+  /// (조각 하나에 걸린 시간. 재생 위치에서 시작하면 끝날 때 그 구간은 이미 지나가 있다)
+  int _leadMs = 0;
+  Duration get _lead => Duration(milliseconds: _leadMs);
+
   // ---- Parakeet (영어) ----
 
   /// whisper로 언어를 다시 확인하기 전까지 Parakeet으로 인식할 조각 수
@@ -1061,6 +1067,25 @@ class SubtitleJob extends ChangeNotifier {
 
     originalFrom = fromStt;
     final tmp = await Directory.systemTemp.createTemp('transcue_');
+    // Android: YouTube 소리를 미리 받아 두고, 다 받으면 파일에서 읽는다
+    // (주소에서 바로 읽으면 구간마다 받는 데 10~30초가 걸린다)
+    String? localAudio;
+    if (Platform.isAndroid && source is YoutubeSource) {
+      unawaited(() async {
+        try {
+          final f = await downloadInRanges(
+            input,
+            headers,
+            File('${tmp.path}/audio'),
+            // 다른 영상으로 넘어가면 그만 받는다
+            cancelled: () => _disposed,
+          );
+          if (!_disposed) localAudio = f.path;
+        } on Exception catch (e) {
+          debugPrint('[audio] download failed: $e');
+        }
+      }());
+    }
     try {
       int? lastEnd;
       _set(
@@ -1070,11 +1095,14 @@ class SubtitleJob extends ChangeNotifier {
       );
       while (!_disposed) {
         // 재생 위치(2초 앞)부터 비어 있는 곳 → 없으면 처음부터 비어 있는 곳
+        // 인식이 느린 기기는 조각 하나에 걸리는 시간만큼 앞에서 시작한다
         final start =
-            _firstGap(_sttFrom(playhead(), total), total) ??
+            _firstGap(_sttFrom(playhead() + _lead, total), total) ??
             _firstGap(0, total);
         if (start == null) break;
-        final jumped = lastEnd == null || (start - lastEnd).abs() > 1000;
+        // 앞에서 시작할 때는 짧은 조각이 도움이 안 된다 (받기·인식에 길이와 상관없이 드는 시간이 크다)
+        final jumped =
+            _leadMs == 0 && (lastEnd == null || (start - lastEnd).abs() > 1000);
         final stop = _nextCoveredStart(start, total);
         final hardEnd = [
           start + (jumped ? _firstChunkMs : _chunkMs),
@@ -1120,7 +1148,7 @@ class SubtitleJob extends ChangeNotifier {
         // 재생 위치를 옮겨서 이 조각이 지금 보는 곳과 상관없어졌으면 그만둔다
         _onSeek = (ph) {
           if (aborted.isCompleted || finished.isCompleted) return;
-          final target = _firstGap(_sttFrom(ph, total), total);
+          final target = _firstGap(_sttFrom(ph + _lead, total), total);
           if (target != null && (target < start || target >= hardEnd)) {
             debugPrint(
               '[stt] seek to ${ph.inSeconds}s: abort chunk ${start ~/ 1000}s',
@@ -1130,7 +1158,7 @@ class SubtitleJob extends ChangeNotifier {
         };
         final sub =
             transcribeRange(
-              input: input,
+              input: localAudio ?? input,
               httpHeaders: headers,
               start: Duration(milliseconds: start),
               length: Duration(milliseconds: readEnd - start),
@@ -1201,6 +1229,9 @@ class SubtitleJob extends ChangeNotifier {
           await _saveCache();
           continue;
         }
+        // 3초 넘게 걸리는 기기는 다음 조각을 그만큼(+여유 2초) 앞에서 시작한다
+        final took = _chunkWatch.elapsedMilliseconds;
+        _leadMs = took > 3000 ? (took + 2000).clamp(0, 90000) : 0;
         if (ended) {
           // 소리가 끝남. 재생 위치부터 시작했다면 앞부분이 남아 있으므로 계속한다
           _addCovered(start, total);
