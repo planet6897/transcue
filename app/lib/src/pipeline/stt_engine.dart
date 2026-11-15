@@ -64,6 +64,7 @@ Stream<SttEvent> transcribeRange({
     return;
   }
   final wav = '${tmp.path}/chunk.wav';
+  final watch = Stopwatch()..start();
   await extractAudio(
     input,
     wav,
@@ -75,16 +76,22 @@ Stream<SttEvent> transcribeRange({
     yield SttEnd();
     return;
   }
+  final extractMs = watch.elapsedMilliseconds;
   if (parakeetModel != null) {
     yield* transcribeParakeet(wavPath: wav, model: parakeetModel);
-    return;
+  } else {
+    yield* transcribe(
+      wavPath: wav,
+      model: model,
+      vadModel: vadModel,
+      language: language,
+      fallbackLanguage: fallbackLanguage,
+    );
   }
-  yield* transcribe(
-    wavPath: wav,
-    model: model,
-    vadModel: vadModel,
-    language: language,
-    fallbackLanguage: fallbackLanguage,
+  debugPrint(
+    '[stt] desktop ${start.inSeconds}s+${length.inSeconds}s: '
+    'extract ${extractMs}ms ${parakeetModel != null ? 'parakeet' : 'whisper'} '
+    '${watch.elapsedMilliseconds - extractMs}ms',
   );
 }
 
