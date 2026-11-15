@@ -211,10 +211,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _view.showVocab = s.showVocab;
       _publishPlayInfo();
       // 개발용: DUALCUE_OPEN=<파일 경로> 로 실행하면 바로 연다 (실기기 자동 검증용)
-      // DUALCUE_OPEN=ted 는 TED 강연 목록을 연다
+      // DUALCUE_OPEN=ted 는 TED 강연 목록을, settings 는 설정 창을 연다 (설명서 화면 캡처용)
       final auto = kDebugMode ? Platform.environment['DUALCUE_OPEN'] : null;
       if (auto == 'ted') {
         unawaited(_openTed());
+      } else if (auto == 'settings') {
+        unawaited(_openSettings());
       } else if (auto != null && auto.isNotEmpty) {
         unawaited(
           parseYoutubeId(auto) != null
