@@ -233,36 +233,82 @@ class TvMenu extends StatelessWidget {
         ),
       ),
       child: FocusTraversalGroup(
-        child: Shortcuts(
-          shortcuts: const {
-            SingleActivator(LogicalKeyboardKey.arrowLeft):
-                DirectionalFocusIntent(TraversalDirection.left),
-            SingleActivator(LogicalKeyboardKey.arrowRight):
-                DirectionalFocusIntent(TraversalDirection.right),
-            SingleActivator(LogicalKeyboardKey.arrowUp):
-                DoNothingAndStopPropagationIntent(),
-            SingleActivator(LogicalKeyboardKey.arrowDown):
-                DoNothingAndStopPropagationIntent(),
-            SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
-            SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
-            SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
-            SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
-          },
-          child: Actions(
-            actions: {
-              DismissIntent: CallbackAction<DismissIntent>(
-                onInvoke: (_) {
-                  onBack();
-                  return null;
+        // 메뉴 버튼을 모으는 노드 (←/→로 옮길 버튼 목록)
+        child: Focus(
+          canRequestFocus: false,
+          skipTraversal: true,
+          child: Builder(
+            builder: (menu) => Shortcuts(
+              shortcuts: const {
+                SingleActivator(LogicalKeyboardKey.arrowLeft): _TvMenuMove(
+                  TraversalDirection.left,
+                ),
+                SingleActivator(LogicalKeyboardKey.arrowRight): _TvMenuMove(
+                  TraversalDirection.right,
+                ),
+                SingleActivator(LogicalKeyboardKey.arrowUp):
+                    DoNothingAndStopPropagationIntent(),
+                SingleActivator(LogicalKeyboardKey.arrowDown):
+                    DoNothingAndStopPropagationIntent(),
+                SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
+                SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+                SingleActivator(LogicalKeyboardKey.numpadEnter):
+                    ActivateIntent(),
+                SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
+              },
+              child: Actions(
+                actions: {
+                  _TvMenuMove: CallbackAction<_TvMenuMove>(
+                    onInvoke: (i) {
+                      _move(menu, i.direction);
+                      return null;
+                    },
+                  ),
+                  DismissIntent: CallbackAction<DismissIntent>(
+                    onInvoke: (_) {
+                      onBack();
+                      return null;
+                    },
+                  ),
                 },
+                child: child,
               ),
-            },
-            child: child,
+            ),
           ),
         ),
       ),
     );
   }
+}
+
+/// [TvMenu] 안에서 ←/→
+class _TvMenuMove extends Intent {
+  const _TvMenuMove(this.direction);
+  final TraversalDirection direction;
+}
+
+/// 메뉴 버튼 사이로만, 화면 왼쪽부터의 순서대로 옮긴다. 끝 버튼에서는 그대로 머문다.
+/// 방향 이동(focusInDirection)은 화면 전체에서 가장 가까운 것을 찾아서, 화면 전체를 덮는
+/// 보이지 않는 포커스(재생 조작용)를 고르는 바람에 포커스가 사라졌다(실사례: 학습 단어에서 ←).
+void _move(BuildContext menu, TraversalDirection dir) {
+  final current = FocusManager.instance.primaryFocus;
+  final buttons =
+      Focus.of(menu).traversalDescendants
+          .where((n) => n.context?.findRenderObject() is RenderBox)
+          .toList()
+        ..sort((a, b) => a.rect.center.dx.compareTo(b.rect.center.dx));
+  if (buttons.isEmpty) return;
+  final i = current == null ? -1 : buttons.indexOf(current);
+  final next = i < 0
+      ? buttons.first
+      : buttons[(i + (dir == TraversalDirection.left ? -1 : 1)).clamp(
+          0,
+          buttons.length - 1,
+        )];
+  if (next == current) return;
+  next.requestFocus();
+  // 메뉴 줄은 가로 스크롤이라 가려진 버튼이면 보이게 민다
+  next.context?.findRenderObject()?.showOnScreen();
 }
 
 /// TV: [TvMenu] 안에서 포커스된 버튼의 설명(툴팁 글)을 버튼 바로 아래에 보여 준다.
