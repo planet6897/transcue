@@ -247,6 +247,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _tvMenuShown.dispose();
     _tvMenuTimer?.cancel();
     _tvFirst.dispose();
+    _tvTed.dispose();
     _mainFocus.dispose();
     _screenBrightness.dispose();
     if (!_playerClosed) {
@@ -1294,17 +1295,21 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// TV(Android TV·Google TV)인지. 리모컨 방향키로만 조작하므로 메뉴에 포커스를 준다.
   bool _tv = false;
 
-  /// 재생 중 TV 메뉴를 보이는지 (↑/↓로 열고, 뒤로 버튼이나 8초 뒤 닫힌다)
+  /// 재생 중 TV 메뉴를 보이는지 (↑/↓·뒤로 버튼으로 열고, 8초 뒤 닫힌다. 떠 있을 때 뒤로 버튼은 앱 종료)
   final _tvMenuShown = ValueNotifier<bool>(false);
   Timer? _tvMenuTimer;
 
   /// 메뉴에서 처음 포커스를 받을 버튼 (원문 자막: 항상 누를 수 있다)
   final _tvFirst = FocusNode(debugLabel: 'tv-menu');
 
+  /// 영상을 열기 전(앱을 켰을 때) 처음 포커스를 받을 버튼: 영어 강연·학습 채널(TED 목록)
+  final _tvTed = FocusNode(debugLabel: 'tv-ted');
+
   /// 메뉴 밖(영상) 포커스. 메뉴를 닫으면 여기로 돌아와 ←/→·가운데 버튼이 재생 조작이 된다
   final _mainFocus = FocusNode(debugLabel: 'player');
 
-  /// TV: 메뉴를 열고(재생 중이면 위에 띄움) 첫 버튼에 포커스
+  /// TV: 메뉴를 열고(재생 중이면 위에 띄움) 첫 버튼에 포커스.
+  /// 영상을 열기 전에는 TED 목록 버튼(있으면)에 포커스
   void _focusTvMenu() {
     if (_opened) {
       _tvMenuShown.value = true;
@@ -1313,10 +1318,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // 대화상자(시작 시 최근 재생목록 등)가 떠 있으면 그 뒤로 포커스를 빼앗지 않는다
       if (mounted && (ModalRoute.of(context)?.isCurrent ?? true)) {
-        _tvFirst.requestFocus();
+        final target = !_opened && _tvTed.context != null ? _tvTed : _tvFirst;
+        target.requestFocus();
         // 메뉴 줄은 가로 스크롤이라 바로 포커스를 주면 버튼이 반쯤 가려 있을 수 있다 (실측)
         // showOnScreen: 가려진 만큼만 최소로 민다
-        _tvFirst.context?.findRenderObject()?.showOnScreen();
+        target.context?.findRenderObject()?.showOnScreen();
       }
     });
   }
@@ -1324,14 +1330,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _restartTvMenuTimer() {
     _tvMenuTimer?.cancel();
     if (!_opened) return;
-    _tvMenuTimer = Timer(const Duration(seconds: 8), _hideTvMenu);
+    _tvMenuTimer = Timer(const Duration(seconds: 8), () {
+      // 메뉴에서 연 창(최근 재생·TED 목록 등)을 고르는 중이면 닫지 않고 기다린다
+      if (_dialogOpen) {
+        _restartTvMenuTimer();
+      } else {
+        _hideTvMenu();
+      }
+    });
   }
 
-  /// TV: 메뉴를 닫고 포커스를 영상으로 (영상을 열기 전이면 포커스만 뺀다)
+  /// 이 화면 위에 창이 떠 있는지
+  bool get _dialogOpen =>
+      mounted && !(ModalRoute.of(context)?.isCurrent ?? true);
+
+  /// TV: 메뉴를 닫고 포커스를 영상으로 (영상을 열기 전이면 포커스만 뺀다).
+  /// 창이 떠 있으면 그 창의 포커스를 빼앗지 않는다 (실사례: 고르는 도중 포커스가 사라짐).
   void _hideTvMenu() {
     _tvMenuTimer?.cancel();
     _tvMenuShown.value = false;
-    if (mounted) _mainFocus.requestFocus();
+    if (mounted && !_dialogOpen) _mainFocus.requestFocus();
   }
 
   /// 재생 중 TV 메뉴: 상단 줄(제목·진행·메뉴)을 영상 위에 띄운다
@@ -1457,6 +1475,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       // 데스크톱은 yt-dlp, Android는 순수 Dart로 받는다
       if (canUseYoutube)
         IconButton(
+          focusNode: _tvTed,
           tooltip: '영어 강연·학습 채널 (TED·BBC·VOA)',
           icon: const Icon(Icons.record_voice_over),
           onPressed: _loading ? null : _openTed,
@@ -1569,14 +1588,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // TV 리모컨 뒤로: 재생 중 메뉴가 떠 있으면 앱을 닫지 않고 메뉴만 닫는다.
-    // (키 단축키로 잡으면 키 다운만 처리되고 키 업이 Android로 넘어가 앱이 닫힌다 — 실측)
+    // 뒤로 버튼. (키 단축키로 잡으면 키 다운만 처리되고 키 업이 Android로 넘어가 앱이 닫힌다 — 실측)
+    // - TV 재생 중: 메뉴가 없으면 메뉴를 열고, 메뉴가 떠 있을 때 한 번 더 누르면 앱을 닫는다
+    // - 그 밖: 메뉴가 떠 있으면 메뉴만 닫는다
     return ValueListenableBuilder<bool>(
       valueListenable: _tvMenuShown,
       builder: (context, menuShown, child) => PopScope(
-        canPop: !menuShown,
+        canPop: _tv && _opened ? menuShown : !menuShown,
         onPopInvokedWithResult: (didPop, _) {
-          if (!didPop) _hideTvMenu();
+          if (didPop) return;
+          if (_tv && _opened) {
+            _focusTvMenu();
+          } else {
+            _hideTvMenu();
+          }
         },
         child: child!,
       ),
@@ -1591,113 +1616,123 @@ class _PlayerScreenState extends State<PlayerScreen> {
       child: Focus(
         focusNode: _mainFocus,
         autofocus: true,
-        child: Scaffold(
-          appBar: _opened
-              ? null
-              : AppBar(
-                  title: Text(_title, overflow: TextOverflow.ellipsis),
-                  actions: [_menuActions()],
-                ),
-          // Android 15+는 화면 끝까지 그리므로 아래 작업 표시줄·내비게이션 바를 피한다
-          // (안 피하면 슬라이드 바·시간·자막 아래쪽이 작업 표시줄에 가려짐)
-          body: SafeArea(
-            top: _opened, // 앱바가 없으면 상단 상태 표시줄도 직접 피한다
-            child: Stack(
-              children: [
-                if (!_deviceKnown) const ColoredBox(color: Colors.black),
-                // media_kit 내장 자막 렌더링은 끄고 자체 오버레이를 사용한다.
-                if (_deviceKnown)
-                  MaterialVideoControlsTheme(
-                    normal: _touchTheme,
-                    fullscreen: _touchFullscreenTheme,
-                    child: MaterialDesktopVideoControlsTheme(
-                      normal: _controlsTheme,
-                      fullscreen: _controlsTheme,
-                      child: Video(
-                        key: _videoKey,
-                        controller: _controller,
-                        subtitleViewConfiguration:
-                            const SubtitleViewConfiguration(visible: false),
-                        // controls 빌더는 전체 화면에서도 다시 쓰이므로 자막을 여기에 넣는다
-                        controls: (state) => Stack(
-                          children: [
-                            // 화면 밝기 (데스크톱): 영상만 어둡게. 자막·조작부는 이 위에 그린다
-                            if (!_touch) _dimLayer(),
-                            if (_touch)
-                              MaterialVideoControls(state)
-                            else
-                              MaterialDesktopVideoControls(state),
-                            // 위/아래로 밀기: 오른쪽은 소리, 왼쪽은 밝기 (조작부 위에 겹침)
-                            if (Platform.isAndroid && !_tv)
-                              const VolumeDragLayer(),
-                            // TV: ↑/↓로 여는 상단 메뉴
-                            if (_tv) _tvMenuOverlay(),
-                            // 상단 메뉴와 하단 조작부를 뺀 영상 영역의 클릭.
-                            // 통과형이라 마우스를 올렸을 때 조작부도 그대로 나타난다
-                            if (!_touch)
-                              Positioned(
-                                top: 56,
-                                left: 0,
-                                right: 0,
-                                bottom: 84,
-                                child: LayoutBuilder(
-                                  builder: (context, box) => Listener(
-                                    behavior: HitTestBehavior.translucent,
-                                    onPointerSignal: (e) =>
-                                        _onWheel(e, box.maxWidth),
-                                    onPointerPanZoomStart: (e) =>
-                                        _onPanZoomStart(e, box.maxWidth),
-                                    onPointerPanZoomUpdate: _onPanZoomUpdate,
-                                    child: GestureDetector(
-                                      behavior: HitTestBehavior.translucent,
-                                      onTap: _onVideoClick,
+        child: Stack(
+          children: [
+            Scaffold(
+              appBar: _opened
+                  ? null
+                  : AppBar(
+                      title: Text(_title, overflow: TextOverflow.ellipsis),
+                      actions: [_menuActions()],
+                    ),
+              // Android 15+는 화면 끝까지 그리므로 아래 작업 표시줄·내비게이션 바를 피한다
+              // (안 피하면 슬라이드 바·시간·자막 아래쪽이 작업 표시줄에 가려짐)
+              body: SafeArea(
+                top: _opened, // 앱바가 없으면 상단 상태 표시줄도 직접 피한다
+                child: Stack(
+                  children: [
+                    if (!_deviceKnown) const ColoredBox(color: Colors.black),
+                    // media_kit 내장 자막 렌더링은 끄고 자체 오버레이를 사용한다.
+                    if (_deviceKnown)
+                      MaterialVideoControlsTheme(
+                        normal: _touchTheme,
+                        fullscreen: _touchFullscreenTheme,
+                        child: MaterialDesktopVideoControlsTheme(
+                          normal: _controlsTheme,
+                          fullscreen: _controlsTheme,
+                          child: Video(
+                            key: _videoKey,
+                            controller: _controller,
+                            subtitleViewConfiguration:
+                                const SubtitleViewConfiguration(visible: false),
+                            // controls 빌더는 전체 화면에서도 다시 쓰이므로 자막을 여기에 넣는다
+                            controls: (state) => Stack(
+                              children: [
+                                // 화면 밝기 (데스크톱): 영상만 어둡게. 자막·조작부는 이 위에 그린다
+                                if (!_touch) _dimLayer(),
+                                if (_touch)
+                                  MaterialVideoControls(state)
+                                else
+                                  MaterialDesktopVideoControls(state),
+                                // 위/아래로 밀기: 오른쪽은 소리, 왼쪽은 밝기 (조작부 위에 겹침)
+                                if (Platform.isAndroid && !_tv)
+                                  const VolumeDragLayer(),
+                                // TV: ↑/↓로 여는 상단 메뉴
+                                if (_tv) _tvMenuOverlay(),
+                                // 상단 메뉴와 하단 조작부를 뺀 영상 영역의 클릭.
+                                // 통과형이라 마우스를 올렸을 때 조작부도 그대로 나타난다
+                                if (!_touch)
+                                  Positioned(
+                                    top: 56,
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 84,
+                                    child: LayoutBuilder(
+                                      builder: (context, box) => Listener(
+                                        behavior: HitTestBehavior.translucent,
+                                        onPointerSignal: (e) =>
+                                            _onWheel(e, box.maxWidth),
+                                        onPointerPanZoomStart: (e) =>
+                                            _onPanZoomStart(e, box.maxWidth),
+                                        onPointerPanZoomUpdate:
+                                            _onPanZoomUpdate,
+                                        child: GestureDetector(
+                                          behavior: HitTestBehavior.translucent,
+                                          onTap: _onVideoClick,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                // 자막 상자가 클릭을 받도록 조작부 위에 둔다 (상자 밖은 통과)
+                                LiveDualSubtitle(
+                                  position: _player.stream.position,
+                                  currentPosition: () => _player.state.position,
+                                  view: _view,
+                                  onTapCue: _copyCue,
+                                ),
+                                Positioned.fill(
+                                  child: Center(
+                                    child: ValueListenableBuilder(
+                                      valueListenable: _centerHint,
+                                      builder: (context, hint, _) =>
+                                          hint ?? const SizedBox.shrink(),
                                     ),
                                   ),
                                 ),
-                              ),
-                            // 자막 상자가 클릭을 받도록 조작부 위에 둔다 (상자 밖은 통과)
-                            LiveDualSubtitle(
-                              position: _player.stream.position,
-                              currentPosition: () => _player.state.position,
-                              view: _view,
-                              onTapCue: _copyCue,
-                            ),
-                            Positioned.fill(
-                              child: Center(
-                                child: ValueListenableBuilder(
-                                  valueListenable: _centerHint,
-                                  builder: (context, hint, _) =>
-                                      hint ?? const SizedBox.shrink(),
-                                ),
-                              ),
-                            ),
-                            // 전체 화면 안내는 상단 줄과 겹치지 않게 그 아래에 둔다
-                            Positioned(
-                              top: 56,
-                              left: 0,
-                              right: 0,
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  ValueListenableBuilder(
-                                    valueListenable: _flash,
-                                    builder: (context, msg, _) => msg == null
-                                        ? const SizedBox.shrink()
-                                        : _OverlayMessage(msg),
+                                // 전체 화면 안내는 상단 줄과 겹치지 않게 그 아래에 둔다
+                                Positioned(
+                                  top: 56,
+                                  left: 0,
+                                  right: 0,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      ValueListenableBuilder(
+                                        valueListenable: _flash,
+                                        builder: (context, msg, _) =>
+                                            msg == null
+                                            ? const SizedBox.shrink()
+                                            : _OverlayMessage(msg),
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                if (_loading) const Center(child: CircularProgressIndicator()),
-              ],
+                    if (_loading)
+                      const Center(child: CircularProgressIndicator()),
+                  ],
+                ),
+              ),
             ),
-          ),
+            // TV: 리모컨으로 고른 메뉴 버튼의 설명
+            if (_tv) const Positioned.fill(child: TvFocusLabel()),
+          ],
         ),
       ),
     );

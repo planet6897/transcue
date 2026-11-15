@@ -274,6 +274,7 @@ class SubtitleJob extends ChangeNotifier {
       if (j['v'] != _cacheVersion) return false; // 이전 버전 결과는 다시 만든다
       sourceLang = j['lang'] as String?;
       originalFrom = '${j['from'] ?? '저장된 자막'}';
+      debugPrint('[cache] saved from=$originalFrom lang=$sourceLang');
       _osTried = j['osTried'] == true;
       syncInfo = j['sync'] as String?;
       _release = j['release'] as String?;
@@ -289,6 +290,16 @@ class SubtitleJob extends ChangeNotifier {
       if (originalFrom == fromStt && (syncInfo?.startsWith('실시간') ?? false)) {
         debugPrint(
           'cache rejected: speech-recognized subtitles shifted by live sync',
+        );
+        return false;
+      }
+      // 예전에 음성과 다른 언어의 YouTube 자막(사람이 단 첫 자막 등)을 원어로 저장한 결과:
+      // 지금 알아낸 음성 언어와 다르거나 음성 언어를 모르면 버리고 다시 받거나 음성 인식으로 만든다
+      if (source case YoutubeSource(:final media)
+          when originalFrom.startsWith('YouTube') &&
+              (media.language == null || media.language != sourceLang)) {
+        debugPrint(
+          'cache rejected: YouTube captions in $sourceLang, speech is ${media.language}',
         );
         return false;
       }

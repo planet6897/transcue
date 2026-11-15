@@ -59,7 +59,7 @@ class YoutubeMedia {
     Map<String, dynamic> info, {
     int maxHeight = 1080,
   }) {
-    final formats = (info['formats'] as List? ?? [])
+    var formats = (info['formats'] as List? ?? [])
         .cast<Map<String, dynamic>>()
         .where(
           (f) =>
@@ -76,6 +76,26 @@ class YoutubeMedia {
 
     bool hasV(Map f) => (f['vcodec'] ?? 'none') != 'none';
     bool hasA(Map f) => (f['acodec'] ?? 'none') != 'none';
+    // 자동 더빙 등 소리 트랙이 여러 개면 원본 음성만 남긴다 (자막 원어와 같은 언어).
+    // yt-dlp는 원본 트랙의 format_note에 'original'을 붙이고 language_preference를 가장 높게 준다.
+    final audioFormats = formats.where(hasA).toList();
+    bool isOriginal(Map f) =>
+        '${f['format_note']}'.toLowerCase().contains('original');
+    num langPref(Map f) => (f['language_preference'] as num?) ?? 0;
+    final bestPref = audioFormats
+        .map(langPref)
+        .fold<num?>(null, (a, b) => a == null || b > a ? b : a);
+    final keepAudio = audioFormats.any(isOriginal)
+        ? isOriginal
+        : (Map f) => langPref(f) == bestPref;
+    formats = [
+      for (final f in formats)
+        if (!hasA(f) || keepAudio(f)) f,
+    ];
+    String? audioLanguage = [
+      for (final f in formats)
+        if (hasA(f) && f['language'] is String) f['language'] as String,
+    ].firstOrNull;
     num h(Map f) => (f['height'] as num?) ?? 0;
     num br(Map f) => (f['tbr'] as num?) ?? (f['abr'] as num?) ?? 0;
     int byQuality(Map a, Map b) {
@@ -130,9 +150,16 @@ class YoutubeMedia {
       throw const FormatException('재생 가능한 포맷이 없습니다');
     }
 
-    final language = info['language'] as String?;
     final manual = _tracks(info['subtitles'], auto: false);
     final auto = _tracks(info['automatic_captions'], auto: true);
+    // 실제 음성 언어: 자동 자막의 '<lang>-orig'(음성을 받아 적은 것) → 원본 소리 트랙의 언어
+    // → 영상 정보의 언어(올린 사람이 적은 값이라 틀릴 수 있다)
+    final spoken = auto.keys
+        .where((k) => k.endsWith('-orig'))
+        .map((k) => k.substring(0, k.length - '-orig'.length))
+        .firstOrNull;
+    audioLanguage = audioLanguage?.split('-').first;
+    final language = spoken ?? audioLanguage ?? info['language'] as String?;
 
     CaptionTrack? pick(Map<String, CaptionTrack> m, bool Function(String) ok) {
       for (final e in m.entries) {
@@ -143,14 +170,14 @@ class YoutubeMedia {
 
     bool isLang(String key, String lang) =>
         key == lang || key.startsWith('$lang-');
-    final orig = language ?? 'en';
+    // 음성 언어를 모르면 원어 자막 없음 → 음성 인식으로 만든다 (다른 언어 자막을 원어로 쓰지 않는다)
     // 자동 자막의 '<lang>-orig'는 원본 음성 인식 결과 (자동 번역이 아님)
-    final original =
-        pick(manual, (k) => isLang(k, orig)) ??
-        auto['$orig-orig'] ??
-        auto[orig] ??
-        (language == null && manual.isNotEmpty ? manual.values.first : null);
-    final korean = orig == 'ko'
+    final original = language == null
+        ? null
+        : pick(manual, (k) => isLang(k, language)) ??
+              auto['$language-orig'] ??
+              auto[language];
+    final korean = language == null || language == 'ko'
         ? null
         : pick(manual, (k) => isLang(k, 'ko')) ?? auto['ko'];
 

@@ -312,6 +312,9 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
       Expanded(
         child: TvTextField(
           controller: _query,
+          hint: '${_channel.name}에서 검색 (영어)',
+          english: true,
+          onSubmitted: (_) => _search(),
           builder: (focus) => TextField(
             focusNode: focus,
             controller: _query,
@@ -410,6 +413,7 @@ class _TedBrowserDialogState extends State<TedBrowserDialog> {
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
           child: TvTextField(
             controller: _filter,
+            hint: '분류에서 찾기',
             builder: (focus) => TextField(
               focusNode: focus,
               controller: _filter,
