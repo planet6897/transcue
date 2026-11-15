@@ -1243,9 +1243,14 @@ class SubtitleJob extends ChangeNotifier {
           await _saveCache();
           continue;
         }
-        // 3초 넘게 걸리는 기기는 다음 조각을 그만큼(+여유 2초) 앞에서 시작한다
+        // Android에서 3초 넘게 걸리면 다음 조각을 그만큼(+여유 2초) 앞에서 시작한다.
+        // Android는 조각이 끝나야 줄을 한꺼번에 내보내므로 재생 위치에서 시작하면 늦는다.
+        // 데스크톱(whisper-cli)은 인식하는 대로 줄을 내보내므로 재생 위치부터 인식해야
+        // 영상 초반 자막이 빠지지 않는다 (앞에서 시작하면 첫 조각 뒤 11~27초가 비었다).
         final took = _chunkWatch.elapsedMilliseconds;
-        _leadMs = took > 3000 ? (took + 2000).clamp(0, 90000) : 0;
+        _leadMs = Platform.isAndroid && took > 3000
+            ? (took + 2000).clamp(0, 90000)
+            : 0;
         if (ended) {
           // 소리가 끝남. 재생 위치부터 시작했다면 앞부분이 남아 있으므로 계속한다
           _addCovered(start, total);
