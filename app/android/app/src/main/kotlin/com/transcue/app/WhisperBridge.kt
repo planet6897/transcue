@@ -143,7 +143,18 @@ class WhisperBridge(messenger: BinaryMessenger) {
         /// [startMs, startMs+lengthMs] 구간의 소리 → 16kHz 모노 float
         fun decodeAudio(path: String, startMs: Long, lengthMs: Long): FloatArray {
             val ex = MediaExtractor()
-            ex.setDataSource(path)
+            // 주소는 조각 요청으로 필요한 부분만 받는다 (통째로 열면 재생 속도로만 받아진다)
+            if (path.startsWith("http://") || path.startsWith("https://")) {
+                try {
+                    ex.setDataSource(RangedHttpSource(path))
+                } catch (e: Exception) {
+                    // 조각 요청을 받지 않는 서버 → 통째로 연다
+                    android.util.Log.w("transcue", "ranged source failed: $e")
+                    ex.setDataSource(path)
+                }
+            } else {
+                ex.setDataSource(path)
+            }
             var track = -1
             for (i in 0 until ex.trackCount) {
                 if (ex.getTrackFormat(i).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
