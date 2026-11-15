@@ -67,8 +67,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late final Player _player = Player(
     configuration: PlayerConfiguration(
       logLevel: kDebugMode ? MPVLogLevel.warn : MPVLogLevel.error,
+      // 기본값(앞 32MB + 뒤 32MB 미리 받기)은 메모리 2GB인 TV 기기에 버겁다
+      // (Chromecast 실측: 재생 중 앱 338MB, 남은 메모리 100MB, 스왑 거의 가득).
+      // 16MB면 1080p YouTube로도 수십 초는 미리 받는다. 뒤쪽은 initState에서 줄인다.
+      bufferSize: Platform.isAndroid ? _androidBuffer : 32 * 1024 * 1024,
     ),
   );
+
+  /// Android 앞쪽 미리 받기 크기
+  static const _androidBuffer = 16 * 1024 * 1024;
+
+  /// Android 지나간 부분을 들고 있는 크기. 이전 문장으로 돌아갈 만큼(1080p로 10~20초)이면 된다.
+  static const _androidBackBuffer = 6 * 1024 * 1024;
 
   /// TV인지 알고 나서([_deviceKnown]) 처음 그릴 때 만든다.
   /// TV(Chromecast 실측): 기본 출력(vo=gpu, mediacodec-copy)은 1080p를 따라가지 못해
@@ -165,6 +175,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void initState() {
     super.initState();
     unawaited(refreshNaturalScroll());
+    final native = _player.platform;
+    if (Platform.isAndroid && native is NativePlayer) {
+      unawaited(
+        native.setProperty('demuxer-max-back-bytes', '$_androidBackBuffer'),
+      );
+    }
     _dropChannel.setMethodCallHandler((call) async {
       if (call.method != 'drop') return;
       final items = (call.arguments as List).cast<String>();
