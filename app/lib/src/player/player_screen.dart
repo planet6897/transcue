@@ -1834,7 +1834,6 @@ class _YoutubeUrlDialogState extends State<_YoutubeUrlDialog> {
         autofocus: true,
         decoration: const InputDecoration(
           hintText: 'https://www.youtube.com/watch?v=...',
-          helperText: '브라우저에서 YouTube 링크를 창 위에 끌어다 놓아도 열립니다',
         ),
         onSubmitted: (_) => _submit(),
       ),
