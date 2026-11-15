@@ -81,11 +81,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   static const _androidBackBuffer = 6 * 1024 * 1024;
 
   /// TV인지 알고 나서([_deviceKnown]) 처음 그릴 때 만든다.
-  /// TV(Chromecast 실측): 기본 출력(vo=gpu, mediacodec-copy)은 1080p를 따라가지 못해
-  /// 0.6배속으로 재생되고 소리·자막과 어긋났다 → 하드웨어 디코더가 화면에 바로 그리게 한다.
+  /// Android: 기본 출력(vo=gpu, mediacodec-copy)은 디코딩한 화면을 복사하느라 영상을 따라가지
+  /// 못해 느리게 재생되고 소리·자막과 어긋났다 (Chromecast 1080p 0.6배속, 갤럭시 탭 S9
+  /// 로컬 파일 0.93배속으로 1분에 3초씩 밀림) → 하드웨어 디코더가 화면에 바로 그리게 한다.
   late final VideoController _controller = VideoController(
     _player,
-    configuration: _tv
+    configuration: _tv || Platform.isAndroid
         ? const VideoControllerConfiguration(
             vo: 'mediacodec_embed',
             hwdec: 'mediacodec',
@@ -1440,9 +1441,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
       ),
       IconButton(
         tooltip: '번역 자막',
-        icon: Icon(
-          _view.showTranslation ? Icons.translate : Icons.g_translate_outlined,
-        ),
+        // 꺼짐은 원문 자막 버튼(subtitles_off)처럼 빗금으로 (Material에 translate_off가 없다)
+        icon: _view.showTranslation
+            ? const Icon(Icons.translate)
+            : const _SlashedIcon(Icons.translate),
         onPressed: () =>
             setState(() => _view.showTranslation = !_view.showTranslation),
       ),
@@ -1864,4 +1866,71 @@ class _YoutubeUrlDialogState extends State<_YoutubeUrlDialog> {
       ],
     );
   }
+}
+
+/// 아이콘 위에 빗금을 그어 "꺼짐"을 나타낸다 (Material에 _off 아이콘이 없는 경우)
+class _SlashedIcon extends StatelessWidget {
+  const _SlashedIcon(this.icon);
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = IconTheme.of(context);
+    final size = theme.size ?? 24;
+    return SizedBox.square(
+      dimension: size,
+      child: CustomPaint(
+        foregroundPainter: _SlashPainter(theme.color ?? Colors.white),
+        // 빗금 둘레의 아이콘을 잘라 내 빗금이 아이콘과 구분되게
+        child: ClipPath(clipper: _SlashGapClipper(), child: Icon(icon)),
+      ),
+    );
+  }
+}
+
+Offset _slashA(Size s) => Offset(s.width * 0.12, s.height * 0.12);
+Offset _slashB(Size s) => Offset(s.width * 0.88, s.height * 0.88);
+
+class _SlashGapClipper extends CustomClipper<Path> {
+  @override
+  Path getClip(Size size) {
+    final a = _slashA(size), b = _slashB(size);
+    final d = size.width * 0.11; // 빗금 굵기의 절반 + 틈
+    final band = Path()
+      ..moveTo(a.dx + d, a.dy - d)
+      ..lineTo(b.dx + d, b.dy - d)
+      ..lineTo(b.dx - d, b.dy + d)
+      ..lineTo(a.dx - d, a.dy + d)
+      ..close();
+    return Path.combine(
+      PathOperation.difference,
+      Path()..addRect(Offset.zero & size),
+      band,
+    );
+  }
+
+  @override
+  bool shouldReclip(_SlashGapClipper old) => false;
+}
+
+class _SlashPainter extends CustomPainter {
+  _SlashPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawLine(
+      _slashA(size),
+      _slashB(size),
+      Paint()
+        ..color = color
+        ..strokeWidth = size.width / 12
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_SlashPainter old) => old.color != color;
 }
