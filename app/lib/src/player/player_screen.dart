@@ -223,7 +223,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       );
     }
     _completedSub = _player.stream.completed.listen((done) {
-      if (done) _onCompleted();
+      // 다른 영상을 여는 중(이전 영상을 멈춤)에는 끝난 것으로 보지 않는다
+      if (done && !_switching) _onCompleted();
     });
     // 재생 중 5초마다, 그리고 일시정지할 때 위치를 기록
     _positionTimer = Timer.periodic(const Duration(seconds: 5), (_) {
@@ -394,8 +395,32 @@ class _PlayerScreenState extends State<PlayerScreen> {
     await _openPath(file.path);
   }
 
-  Future<void> _openPath(String path) async {
+  /// 이전 영상을 멈추고 새 영상을 여는 중 (멈춘 것을 '영상 끝'으로 보지 않게)
+  bool _switching = false;
+
+  /// 다른 영상을 열기 전에 지금 영상을 멈추고 처음 화면으로 돌린다.
+  /// (YouTube는 주소를 알아내는 데 몇 초 걸려 그동안 이전 영상이 계속 재생됐다)
+  Future<void> _unloadCurrent() async {
+    _switching = true;
     await _rememberPosition(); // 보던 영상의 위치를 먼저 기록
+    _resumeKey = null;
+    _sentenceLoopSub?.cancel();
+    _sentenceLoopSub = null;
+    _sentenceLoop = null;
+    _job?.dispose();
+    _job = null;
+    _view.cues = const [];
+    await _player.stop();
+    if (!mounted) return;
+    setState(() {
+      _opened = false;
+      _title = 'Transcue';
+      _currentPath = null;
+    });
+  }
+
+  Future<void> _openPath(String path) async {
+    await _unloadCurrent();
     _onlineQueue = null; // 내 파일은 폴더 순서로 연속 재생한다
     setState(() {
       _title = path.split(Platform.pathSeparator).last;
@@ -408,6 +433,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     unawaited(_rememberRecent(path, _title));
     final loaded = _durationLoaded();
     await _player.open(Media(path));
+    _switching = false;
     // 자막 작업은 재생 위치부터 시작하므로 이어 보기 위치로 먼저 옮긴다
     await _resumeAt(PlaybackPositions.keyForPath(path), loaded);
     _startJob(LocalFileSource(path));
@@ -509,6 +535,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
 
     setState(() => _loading = true);
+    await _unloadCurrent();
     try {
       final media = await _ytDlp.resolve(youtubeWatchUrl(id));
       setState(() {
@@ -548,6 +575,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       debugPrint('YouTube open failed: $e');
       _toast('YouTube 열기 실패: $e');
     } finally {
+      _switching = false;
       if (mounted) setState(() => _loading = false);
     }
   }
