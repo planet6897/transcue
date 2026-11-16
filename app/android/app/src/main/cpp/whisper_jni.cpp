@@ -1,6 +1,9 @@
 // whisper.cpp JNI: 16kHz 모노 PCM → 자막 줄 (데스크톱 whisper-cli와 같은 설정)
 #include <jni.h>
+#include <atomic>
 #include <cstdio>
+#include <cstring>
+#include <android/log.h>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -10,6 +13,37 @@
 #include "whisper.h"
 
 namespace {
+// 재생 위치를 옮겨 지금 조각이 필요 없어지면 앱이 켠다 (whisper가 다음 확인 때 멈춘다)
+std::atomic<bool> g_abort{false};
+
+// 언어 감지 확신이 낮고 직전 언어와 다르면 그 언어로 다시 인식한다 (데스크톱과 같은 규칙).
+// 태블릿 실사례: 일본어 영상의 구간이 ko·en으로 감지되어 엉뚱한 글자가 나왔다.
+// whisper는 감지 결과를 로그로만 알려 주므로 로그에서 읽는다.
+constexpr float kMinLanguageConfidence = 0.8f;
+std::string g_fallback;           // 직전에 믿은 언어 (없으면 빈 값)
+std::atomic<bool> g_retry{false};  // 감지가 미덥지 않아 다시 인식해야 함
+std::string g_detected;
+float g_detected_p = -1.0f;
+
+bool shouldAbort(void *) { return g_abort.load() || g_retry.load(); }
+
+void onWhisperLog(ggml_log_level, const char *text, void *) {
+  if (text == nullptr) return;
+  const char *m = std::strstr(text, "auto-detected language: ");
+  if (m == nullptr) return;
+  char lang[16] = {0};
+  float p = -1.0f;
+  if (std::sscanf(m, "auto-detected language: %15s (p = %f)", lang, &p) < 1) {
+    return;
+  }
+  g_detected = lang;
+  g_detected_p = p;
+  if (!g_fallback.empty() && g_detected != g_fallback && p >= 0.0f &&
+      p < kMinLanguageConfidence) {
+    g_retry.store(true);  // 이번 인식은 멈추고 직전 언어로 다시
+  }
+}
+
 std::mutex g_mu;
 whisper_context *g_ctx = nullptr;
 std::string g_model;
@@ -37,11 +71,20 @@ std::string str(JNIEnv *env, jstring s) {
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_transcue_app_WhisperBridge_nativeTranscribe(
     JNIEnv *env, jobject, jstring jmodel, jstring jvad, jstring jlang,
-    jint threads, jfloatArray jpcm) {
+    jstring jfallback, jint threads, jfloatArray jpcm) {
   std::lock_guard<std::mutex> lock(g_mu);
   const std::string model = str(env, jmodel);
   const std::string vad = str(env, jvad);
   const std::string lang = str(env, jlang);
+  static bool logHooked = false;
+  if (!logHooked) {
+    whisper_log_set(onWhisperLog, nullptr);
+    logHooked = true;
+  }
+  g_fallback = str(env, jfallback);
+  g_retry.store(false);
+  g_detected.clear();
+  g_detected_p = -1.0f;
 
   if (g_ctx == nullptr || g_model != model) {
     if (g_ctx != nullptr) whisper_free(g_ctx);
@@ -67,19 +110,32 @@ Java_com_transcue_app_WhisperBridge_nativeTranscribe(
   p.no_context = true;
   p.n_max_text_ctx = 0;
   p.language = lang.empty() ? "auto" : lang.c_str();
+  p.abort_callback = shouldAbort;
+  p.abort_callback_user_data = nullptr;
   if (!vad.empty()) {
     p.vad = true;
     p.vad_model_path = vad.c_str();
     p.vad_params = whisper_vad_default_params();
     p.vad_params.max_speech_duration_s = 15.0f;  // -vmsd 15
   }
-  if (whisper_full(g_ctx, p, pcm.data(), n) != 0) return nullptr;
+  int rc = whisper_full(g_ctx, p, pcm.data(), n);
+  if (g_retry.load() && !g_abort.load()) {
+    __android_log_print(ANDROID_LOG_INFO, "transcue",
+                        "low-confidence language %s (p=%.2f), retry as %s",
+                        g_detected.c_str(), g_detected_p, g_fallback.c_str());
+    g_retry.store(false);
+    p.language = g_fallback.c_str();
+    rc = whisper_full(g_ctx, p, pcm.data(), n);
+  }
+  if (rc != 0) return nullptr;
 
   std::string out;
-  const int lid = whisper_full_lang_id(g_ctx);
-  out += lid >= 0 ? whisper_lang_str(lid) : "";
-  out += '\n';
   const int ns = whisper_full_n_segments(g_ctx);
+  // 받아 적은 말이 없으면(음악·무음) 언어를 알리지 않는다: 소리 없는 곳이 'en'으로
+  // 감지되어 다음 구간의 기준 언어가 바뀌었다
+  const int lid = whisper_full_lang_id(g_ctx);
+  if (ns > 0 && lid >= 0) out += whisper_lang_str(lid);
+  out += '\n';
   for (int i = 0; i < ns; i++) {
     std::string text = whisper_full_get_segment_text(g_ctx, i);
     for (auto &c : text) {
@@ -96,6 +152,13 @@ Java_com_transcue_app_WhisperBridge_nativeTranscribe(
   env->SetByteArrayRegion(arr, 0, static_cast<jsize>(out.size()),
                           reinterpret_cast<const jbyte *>(out.data()));
   return arr;
+}
+
+// 지금 하는 음성 인식을 멈추게(true) / 다음 인식 전에 풀기(false)
+extern "C" JNIEXPORT void JNICALL
+Java_com_transcue_app_WhisperBridge_nativeSetAbort(JNIEnv *, jobject,
+                                                   jboolean on) {
+  g_abort.store(on == JNI_TRUE);
 }
 
 // 말소리 구간 (데스크톱 whisper-vad-speech-segments와 같은 기본 설정).
