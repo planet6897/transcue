@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 import '../pipeline/tools.dart';
 import 'youtube_backend.dart';
 import 'youtube_url.dart';
@@ -32,7 +34,12 @@ class YoutubeMedia {
     this.original,
     this.korean,
     this.duration,
+    this.captionTracks = const [],
   });
+
+  /// 받을 수 있는 자막 트랙 (사람이 만든 자막과 음성 받아쓰기 자동 자막. 자동 번역은 뺀다).
+  /// 음성 언어를 몰라 [original]을 못 고른 영상에서, 음성 인식으로 언어를 알아낸 뒤 고른다.
+  final List<CaptionTrack> captionTracks;
 
   /// 영상 길이 (yt-dlp `duration`)
   final Duration? duration;
@@ -198,6 +205,11 @@ class YoutubeMedia {
       duration: info['duration'] is num
           ? Duration(milliseconds: ((info['duration'] as num) * 1000).round())
           : null,
+      captionTracks: [
+        ...manual.values,
+        for (final e in auto.entries)
+          if (e.key.endsWith('-orig')) e.value,
+      ],
     );
   }
 
@@ -221,6 +233,65 @@ class YoutubeMedia {
     }
     return out;
   }
+}
+
+/// 음성 언어 [lang]의 원어 자막: 사람이 만든 자막 → 음성 받아쓰기 자동 자막(`<lang>-orig` 또는 [lang])
+CaptionTrack? captionForLanguage(List<CaptionTrack> tracks, String lang) {
+  bool isLang(String code) => code == lang || code.startsWith('$lang-');
+  return tracks.where((t) => !t.auto && isLang(t.lang)).firstOrNull ??
+      tracks.where((t) => t.auto && isLang(t.lang)).firstOrNull;
+}
+
+/// 제목 글자로 짐작한 영상 언어. 짐작이 어려우면 null.
+/// (음성 언어를 YouTube가 알려 주지 않을 때 자막을 바로 보여 주려는 용도. 음성 인식으로 다시 확인한다)
+String? guessLanguageFromTitle(String title) {
+  int count(RegExp r) => r.allMatches(title).length;
+  final hangul = count(RegExp(r'[가-힣]'));
+  final kana = count(RegExp(r'[぀-ヿ]'));
+  final han = count(RegExp(r'[一-鿿]'));
+  final cyrillic = count(RegExp(r'[Ѐ-ӿ]'));
+  final latin = count(RegExp(r'[A-Za-z]'));
+  if (hangul > 0 && hangul >= kana) return 'ko';
+  if (kana > 0) return 'ja';
+  if (han > 0) return 'zh';
+  if (cyrillic > latin) return 'ru';
+  if (latin == 0) return null;
+  // 라틴 글자는 언어가 여럿이라 흔한 영어 낱말이 있을 때만 영어로 본다
+  const english = {
+    'the',
+    'a',
+    'an',
+    'of',
+    'to',
+    'and',
+    'is',
+    'are',
+    'in',
+    'on',
+    'for',
+    'with',
+    'how',
+    'why',
+    'what',
+    'when',
+    'who',
+    'you',
+    'your',
+    'can',
+    'do',
+    'does',
+    'this',
+    'that',
+    'it',
+    'my',
+    'we',
+    'i',
+    'be',
+    'from',
+    'about',
+  };
+  final words = title.toLowerCase().split(RegExp(r"[^a-z']+"));
+  return words.any(english.contains) ? 'en' : null;
 }
 
 class YtDlpException implements Exception {
@@ -270,7 +341,14 @@ class YtDlp implements YoutubeBackend {
   @override
   Future<YoutubeMedia> resolve(String url) async {
     final out = await _run(['-J', url]);
-    return YoutubeMedia.fromInfoJson(jsonDecode(out) as Map<String, dynamic>);
+    final m = YoutubeMedia.fromInfoJson(
+      jsonDecode(out) as Map<String, dynamic>,
+    );
+    debugPrint(
+      '[captions] ${m.id} tracks=${[for (final t in m.captionTracks) '${t.lang}${t.auto ? '(auto)' : ''}']} '
+      '→ original=${m.original?.lang} korean=${m.korean?.lang} language=${m.language}',
+    );
+    return m;
   }
 
   /// 채널·재생목록의 영상 목록(`--flat-playlist`). [start]부터 [end]까지 (1부터, 끝 포함).

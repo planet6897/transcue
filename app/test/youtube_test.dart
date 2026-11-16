@@ -3,6 +3,40 @@ import 'package:transcue/src/source/yt_dlp.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('guessLanguageFromTitle', () {
+    test('흔한 영어 낱말이 있으면 영어', () {
+      expect(
+        guessLanguageFromTitle('The trillion dollar paradox - George Zaidan'),
+        'en',
+      );
+      expect(
+        guessLanguageFromTitle('Why is pepper such a popular spice?'),
+        'en',
+      );
+    });
+    test('글자 종류로 한국어·일본어·중국어', () {
+      expect(guessLanguageFromTitle('한국어 강의 1편'), 'ko');
+      expect(guessLanguageFromTitle('日本語の勉強'), 'ja');
+      expect(guessLanguageFromTitle('中文学习'), 'zh');
+    });
+    test('영어인지 알 수 없는 라틴 글자는 짐작하지 않는다', () {
+      expect(guessLanguageFromTitle('El precio del cacao'), isNull);
+      expect(guessLanguageFromTitle('12345'), isNull);
+    });
+  });
+
+  group('captionForLanguage', () {
+    const tracks = [
+      CaptionTrack(lang: 'en-orig', url: 'a', auto: true),
+      CaptionTrack(lang: 'en', url: 'm', auto: false),
+      CaptionTrack(lang: 'ko', url: 'k', auto: false),
+    ];
+    test('사람이 만든 자막을 먼저 고른다', () {
+      expect(captionForLanguage(tracks, 'en')?.url, 'm');
+      expect(captionForLanguage(tracks, 'fr'), isNull);
+    });
+  });
+
   group('parseYoutubeId', () {
     const id = 'dQw4w9WgXcQ';
     for (final url in [

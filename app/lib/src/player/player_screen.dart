@@ -35,21 +35,32 @@ import 'tv.dart';
 import 'volume_gesture.dart';
 
 /// 자막 다시 만들기 메뉴
-enum _Regen {
-  fetch(
-    '자막 다시 가져오기',
-    '저장된 자막과 번역을 무시하고 내장·인터넷·YouTube 자막을 다시 찾습니다. '
-        '없으면 음성 인식으로 만들고, 번역도 새로 합니다. API 비용이 다시 발생합니다.',
-  ),
-  speech(
-    '음성 인식으로 새로 만들기',
-    '저장된 자막과 번역을 무시하고 음성 인식으로 자막을 새로 만든 뒤 번역합니다. '
-        '시간이 걸리고 API 비용이 다시 발생합니다.',
-  );
+/// 영상이 끝났을 때 (상단 메뉴 버튼 하나로 차례로 바꾼다, R 키)
+enum _PlayMode {
+  /// 다음 영상: YouTube는 목록의 다음 영상, 로컬 파일은 같은 폴더의 다음 파일
+  next('연속 재생', '끝나면 다음 영상', Icons.playlist_play),
 
-  const _Regen(this.label, this.detail);
+  /// 지금 영상을 처음부터 다시
+  repeat('반복 재생', '지금 영상을 계속', Icons.repeat_one),
+
+  /// 끝나면 멈춤
+  once('한 번 재생', '끝나면 멈춤', Icons.playlist_remove);
+
+  const _PlayMode(this.label, this.detail, this.icon);
   final String label;
   final String detail;
+  final IconData icon;
+}
+
+enum _Regen {
+  /// 음성 인식으로 자막을 만든 뒤 번역 (YouTube·내장 자막이 있어도)
+  speech('자막 생성'),
+
+  /// 음성 인식 자막을 버리고 YouTube·내장·인터넷 자막을 다시 찾는다 (없으면 다시 음성 인식)
+  fetch('원래 자막으로 되돌리기');
+
+  const _Regen(this.label);
+  final String label;
 }
 
 /// 플레이어 화면: 로컬 파일 / YouTube 재생 + 이중 자막 오버레이.
@@ -105,7 +116,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   AppSettings _settings = AppSettings();
   SubtitleJob? _job;
-  String _title = 'Transcue · AI 동영상 플레이어';
+  String _title = 'Transcue';
   bool _loading = false;
 
   /// 영상을 연 적이 있는지 (열기 전에는 메뉴를 항상 보여 준다)
@@ -629,6 +640,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       builder: (_) => RecentVideosDialog(
         rows: rows,
         onRemove: (s) => unawaited(store.remove(s)),
+        onClear: () => unawaited(store.clear()),
       ),
     );
     if (picked == null) return;
@@ -671,11 +683,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _toast('재생 횟수를 초기화했습니다');
   }
 
-  Future<void> _toggleRepeat() async {
-    setState(() => _settings.repeatVideo = !_settings.repeatVideo);
+  /// 설정에 저장된 두 값(반복·연속)에서 재생 모드. 둘 다 켜진 예전 설정은 반복이 이긴다.
+  _PlayMode get _playMode => _settings.repeatVideo
+      ? _PlayMode.repeat
+      : _settings.autoPlayNext
+      ? _PlayMode.next
+      : _PlayMode.once;
+
+  /// 재생 모드를 차례로 바꾼다: 연속 → 반복 → 한 번 → 연속 (R)
+  Future<void> _cyclePlayMode() async {
+    final mode =
+        _PlayMode.values[(_playMode.index + 1) % _PlayMode.values.length];
+    setState(() {
+      _settings.repeatVideo = mode == _PlayMode.repeat;
+      _settings.autoPlayNext = mode == _PlayMode.next;
+    });
     _publishPlayInfo();
     await _settings.save();
-    _toast(_settings.repeatVideo ? '반복 재생 켜짐 (R)' : '반복 재생 꺼짐 (R)');
+    _toast('${mode.label}: ${mode.detail} (R)');
   }
 
   /// 자막 복사 때문에 멈춘 상태인지 (재생이 다시 시작되면 해제)
@@ -696,14 +721,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _view.flashCopied();
   }
 
-  /// 자막이 이상할 때 한 번에 AI로 다시 번역한다
+  /// 원문은 그대로 두고 번역만 AI로 새로 한다 (YouTube 한국어 자막·이전 번역 대신)
   void _retranslate() {
-    _toast('AI로 다시 번역합니다');
+    _toast('AI로 번역합니다');
     unawaited(_job?.retranslate());
   }
 
-  /// PopupMenuButton은 메뉴가 떠 있는 사이 조작부가 자동으로 사라져 버튼이 없어지면
-  /// 고른 항목을 버린다. 그래서 메뉴를 직접 띄워 결과를 받는다.
   // ---- 문장 반복 ----
 
   /// 문장 반복 켜기/끄기 (L)
@@ -822,46 +845,42 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
-  Future<void> _showRegenMenu(BuildContext button) async {
-    final box = button.findRenderObject()! as RenderBox;
-    final overlay =
-        Navigator.of(button).overlay!.context.findRenderObject()! as RenderBox;
-    final regen = await showMenu<_Regen>(
-      context: button,
-      position: RelativeRect.fromRect(
-        box.localToGlobal(Offset.zero, ancestor: overlay) & box.size,
-        Offset.zero & overlay.size,
-      ),
-      items: [
-        PopupMenuItem(value: _Regen.fetch, child: Text(_Regen.fetch.label)),
-        if (canTranscribe)
-          PopupMenuItem(value: _Regen.speech, child: Text(_Regen.speech.label)),
-      ],
-    );
-    if (regen != null && mounted) await _confirmRegen(regen);
-  }
-
-  /// 자막 다시 만들기: 비용이 드는 작업이라 먼저 확인한다
-  Future<void> _confirmRegen(_Regen regen) async {
+  /// 자막 자동 생성: 시간이 걸리고 번역 비용이 드는 작업이라 먼저 확인한다.
+  /// 이미 음성 인식 자막이면 원래 자막(YouTube·내장·인터넷)으로 되돌릴 수도 있다.
+  Future<void> _confirmRegen() async {
     final job = _job;
-    final ok = await showDialog<bool>(
+    if (job == null) return;
+    final fromStt = job.originalFrom == SubtitleJob.fromStt;
+    final regen = await showDialog<_Regen>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(regen.label),
-        content: Text(regen.detail),
+        title: const Text('자막 자동 생성'),
+        content: Text(
+          fromStt
+              ? '지금 자막은 음성 인식으로 만든 것입니다. '
+                    '음성 인식으로 처음부터 다시 만들거나, YouTube·내장·인터넷 자막으로 '
+                    '되돌릴 수 있습니다. 번역도 새로 하므로 API 비용이 다시 발생합니다.'
+              : '지금 자막(${job.originalFrom}) 대신 음성 인식으로 자막을 새로 만든 뒤 '
+                    '번역합니다. 시간이 걸리고 API 비용이 다시 발생합니다.',
+        ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(context),
             child: const Text('취소'),
           ),
+          if (fromStt)
+            TextButton(
+              onPressed: () => Navigator.pop(context, _Regen.fetch),
+              child: Text(_Regen.fetch.label),
+            ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('다시 만들기'),
+            onPressed: () => Navigator.pop(context, _Regen.speech),
+            child: Text(_Regen.speech.label),
           ),
         ],
       ),
     );
-    if (ok == true && job != null && identical(job, _job)) _applyRegen(regen);
+    if (regen != null && identical(job, _job)) _applyRegen(regen);
   }
 
   void _applyRegen(_Regen regen) {
@@ -889,7 +908,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return;
     }
     final path = _currentPath;
-    if (path == null) return;
+    if (path == null) {
+      // 링크로 연 YouTube 영상: 이어서 틀 목록이 없다
+      _toast('다음 영상이 없습니다 (채널 목록에서 연 영상만 이어서 재생)');
+      return;
+    }
     final next = neighborVideo(path);
     if (next == null) {
       _toast('마지막 영상입니다');
@@ -949,19 +972,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _openPath(target);
   }
 
-  Future<void> _toggleAutoPlayNext() async {
-    setState(() => _settings.autoPlayNext = !_settings.autoPlayNext);
-    await _settings.save();
-    _toast(_settings.autoPlayNext ? '연속 재생 켜짐' : '연속 재생 꺼짐');
-  }
-
   Future<void> _openSettings() async {
     final osBefore = _settings.osApiKey;
     final levelBefore = _settings.vocabLevel;
+    var cacheCleared = false;
     final saved = await showDialog<bool>(
       context: context,
-      builder: (_) => SettingsDialog(settings: _settings),
+      builder: (_) => SettingsDialog(
+        settings: _settings,
+        onCacheCleared: () => cacheCleared = true,
+      ),
     );
+    // 저장된 자막을 지웠으면 지금 영상도 처음부터 다시 (지금 작업이 다시 저장하지 않게)
+    if (cacheCleared) {
+      final job = _job;
+      if (saved == true) await _settings.save();
+      if (job != null) _startJob(job.source, refresh: JobRefresh.fetch);
+      return;
+    }
     if (saved != true) return;
     await _settings.save();
     _toast('설정을 저장했습니다');
@@ -1010,7 +1038,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     const SingleActivator(LogicalKeyboardKey.bracketRight): () =>
         _nudge(const Duration(milliseconds: 200)),
     const SingleActivator(LogicalKeyboardKey.keyV): _toggleVocab,
-    const SingleActivator(LogicalKeyboardKey.keyR): _toggleRepeat,
+    const SingleActivator(LogicalKeyboardKey.keyR): _cyclePlayMode,
     const SingleActivator(LogicalKeyboardKey.keyL): _toggleSentenceLoop,
     const SingleActivator(LogicalKeyboardKey.keyR, shift: true): _resetCount,
     // 처음부터
@@ -1407,29 +1435,93 @@ class _PlayerScreenState extends State<PlayerScreen> {
     child: VerticalDivider(width: 13, thickness: 1, color: Colors.white24),
   );
 
+  /// 영상을 열기 전 화면: 영상을 여는 방법과 번역 안내
+  Widget _welcome() {
+    final hint = Theme.of(
+      context,
+    ).textTheme.bodyMedium?.copyWith(color: Colors.white70);
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '영상을 열면 원문·한국어 이중 자막으로 재생합니다',
+              style: Theme.of(context).textTheme.titleLarge,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              alignment: WrapAlignment.center,
+              children: [
+                FilledButton.icon(
+                  onPressed: _openFile,
+                  icon: const Icon(Icons.folder_open),
+                  label: const Text('동영상 파일 열기'),
+                ),
+                if (canUseYoutube)
+                  OutlinedButton.icon(
+                    onPressed: _openTed,
+                    icon: const Icon(Icons.record_voice_over),
+                    label: const Text('영어 강연·학습 채널 (TED·BBC·VOA)'),
+                  ),
+                OutlinedButton.icon(
+                  onPressed: _showRecent,
+                  icon: const Icon(Icons.history),
+                  label: const Text('최근 재생목록'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            if (!Platform.isAndroid)
+              Text('동영상 파일이나 YouTube 링크를 이 창에 끌어다 놓아도 됩니다', style: hint),
+            if (!_settings.hasTranslateKey) ...[
+              const SizedBox(height: 8),
+              Text(
+                'YouTube·내장 한국어 자막이 있으면 그대로 보여 줍니다. '
+                '없는 영상을 번역하려면 설정(⚙)에서 번역 API 키를 넣으세요.',
+                style: hint,
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   /// 상단 메뉴. 기능별로 묶고, 창이 좁으면 왼쪽부터 가려지므로(가로 스크롤) 자주 쓰는
   /// 것을 오른쪽에 둔다: 자막 도구 | 자막 보기 | 재생 | 열기 | 설정
   /// 버튼이 포커스를 가져가면 Space/Enter가 버튼을 누르게 되므로 제외한다.
   Widget _menuActions() => ExcludeFocus(
     // TV는 리모컨으로 버튼 사이를 움직여야 하므로 포커스를 받는다
     excluding: !_tv,
-    child: _tv ? TvMenu(onBack: _hideTvMenu, child: _menuRow()) : _menuRow(),
+    child: _tv
+        ? TvMenu(onBack: _hideTvMenu, child: _menuRow())
+        // 버튼이 많아 1280px 창에서도 넘쳤다 (맨 왼쪽 버튼이 가려짐) → 마우스용으로 촘촘하게
+        : IconButtonTheme(
+            data: IconButtonThemeData(
+              style: IconButton.styleFrom(visualDensity: VisualDensity.compact),
+            ),
+            child: _menuRow(),
+          ),
   );
 
   Widget _menuRow() => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
       IconButton(
-        tooltip: 'AI로 다시 번역',
+        tooltip: '자막 자동 생성 (음성 인식)',
+        icon: const Icon(Icons.mic),
+        onPressed: _job == null || !canTranscribe ? null : _confirmRegen,
+      ),
+      IconButton(
+        tooltip: 'AI 번역',
         icon: const Icon(Icons.auto_awesome),
         onPressed: _job?.canRetranslate ?? false ? _retranslate : null,
-      ),
-      Builder(
-        builder: (button) => IconButton(
-          tooltip: '자막·번역 다시 만들기',
-          icon: const Icon(Icons.restart_alt),
-          onPressed: _job == null ? null : () => _showRegenMenu(button),
-        ),
       ),
       _menuDivider,
       IconButton(
@@ -1458,12 +1550,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
       ),
       _menuDivider,
       IconButton(
-        tooltip: _settings.repeatVideo ? '반복 재생 켜짐 (R)' : '반복 재생 꺼짐 (R)',
+        tooltip: '${_playMode.label}: ${_playMode.detail} (R)',
         icon: Icon(
-          Icons.repeat_one,
-          color: _settings.repeatVideo ? const Color(0xFF80DEEA) : null,
+          _playMode.icon,
+          color: _playMode == _PlayMode.once ? null : const Color(0xFF80DEEA),
         ),
-        onPressed: _toggleRepeat,
+        onPressed: _cyclePlayMode,
       ),
       _sentenceLoopButton(),
       IconButton(
@@ -1475,14 +1567,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
         tooltip: '다음 영상 (N)',
         icon: const Icon(Icons.skip_next),
         onPressed: _canSkip ? () => _skip(1) : null,
-      ),
-      IconButton(
-        tooltip: _settings.autoPlayNext ? '연속 재생 켜짐' : '연속 재생 꺼짐',
-        icon: Icon(
-          _settings.autoPlayNext ? Icons.playlist_play : Icons.playlist_remove,
-          color: _settings.autoPlayNext ? const Color(0xFF80DEEA) : null,
-        ),
-        onPressed: _toggleAutoPlayNext,
       ),
       _menuDivider,
       // YouTube는 yt-dlp가 필요해 데스크톱만
@@ -1643,7 +1727,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   ? null
                   : AppBar(
                       title: Text(_title, overflow: TextOverflow.ellipsis),
-                      actions: [_menuActions()],
+                      actions: [
+                        // 폭이 좁으면 제목을 남기고 버튼 줄을 가로로 밀 수 있게 한다
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.sizeOf(context).width * 0.6,
+                          ),
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            reverse: true,
+                            child: _menuActions(),
+                          ),
+                        ),
+                      ],
                     ),
               // Android 15+는 화면 끝까지 그리므로 아래 작업 표시줄·내비게이션 바를 피한다
               // (안 피하면 슬라이드 바·시간·자막 아래쪽이 작업 표시줄에 가려짐)
@@ -1744,6 +1840,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           ),
                         ),
                       ),
+                    // 처음 화면: 무엇을 하면 되는지 (빈 검은 화면 대신)
+                    if (_deviceKnown && !_opened && !_loading && !_tv)
+                      _welcome(),
                     if (_loading)
                       const Center(child: CircularProgressIndicator()),
                   ],

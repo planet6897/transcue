@@ -63,6 +63,12 @@ class RecentVideos {
     await _save();
   }
 
+  Future<void> clear() async {
+    await _load();
+    _items.clear();
+    await _save();
+  }
+
   Future<void> remove(String source) async {
     await _load();
     _items.removeWhere((v) => v.source == source);
@@ -109,10 +115,14 @@ class RecentVideosDialog extends StatefulWidget {
     super.key,
     required this.rows,
     required this.onRemove,
+    this.onClear,
   });
 
   final List<RecentRow> rows;
   final ValueChanged<String> onRemove;
+
+  /// 목록을 모두 지운다 (이어 보기 위치·재생 횟수는 남긴다)
+  final VoidCallback? onClear;
 
   @override
   State<RecentVideosDialog> createState() => _RecentVideosDialogState();
@@ -120,6 +130,31 @@ class RecentVideosDialog extends StatefulWidget {
 
 class _RecentVideosDialogState extends State<RecentVideosDialog> {
   late final _rows = [...widget.rows];
+
+  Future<void> _confirmClear() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('최근 재생목록 지우기'),
+        content: Text(
+          '목록의 영상 ${_rows.length}개를 모두 지웁니다. 영상 파일과 저장된 자막은 지우지 않습니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('모두 지우기'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    widget.onClear?.call();
+    setState(_rows.clear);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -159,6 +194,12 @@ class _RecentVideosDialogState extends State<RecentVideosDialog> {
               ),
       ),
       actions: [
+        if (widget.onClear != null)
+          TextButton.icon(
+            onPressed: _rows.isEmpty ? null : _confirmClear,
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('모두 지우기'),
+          ),
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('닫기'),

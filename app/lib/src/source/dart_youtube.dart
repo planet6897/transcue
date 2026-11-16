@@ -74,6 +74,12 @@ class DartYoutube implements YoutubeBackend {
       original: original,
       korean: korean,
       duration: video.duration,
+      // 자동 자막은 언어가 하나일 때만 음성 받아쓰기다 (여럿이면 자동 더빙)
+      captionTracks: [
+        ...tracks.where((t) => !t.auto),
+        if ({for (final t in tracks.where((t) => t.auto)) t.lang}.length == 1)
+          ...tracks.where((t) => t.auto),
+      ],
     );
   }
 

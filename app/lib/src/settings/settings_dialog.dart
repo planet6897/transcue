@@ -2,19 +2,74 @@ import 'package:flutter/material.dart';
 
 import '../app_version.dart';
 import '../pipeline/stt_engine.dart' show canUseParakeet;
+import '../pipeline/subtitle_job.dart'
+    show clearSubtitleCache, subtitleCacheSize;
 import 'app_settings.dart';
 
 /// 설정 화면: 번역 공급자·API 키·모델, 음성 인식 모델.
 class SettingsDialog extends StatefulWidget {
-  const SettingsDialog({super.key, required this.settings});
+  const SettingsDialog({
+    super.key,
+    required this.settings,
+    this.onCacheCleared,
+  });
 
   final AppSettings settings;
+
+  /// 저장된 자막을 지운 뒤 (지금 영상의 자막을 다시 만들게)
+  final VoidCallback? onCacheCleared;
 
   @override
   State<SettingsDialog> createState() => _SettingsDialogState();
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
+  /// 저장된 자막 개수·크기 (읽는 중이면 null)
+  ({int files, int bytes})? _cache;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCacheSize();
+  }
+
+  Future<void> _loadCacheSize() async {
+    final s = await subtitleCacheSize();
+    if (mounted) setState(() => _cache = s);
+  }
+
+  Future<void> _clearCache() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('저장된 자막 모두 지우기'),
+        content: const Text(
+          '지금까지 본 모든 영상의 자막·번역·싱크 결과를 지웁니다. '
+          '다음에 열면 자막을 다시 가져오거나 음성 인식하고, 번역도 다시 하므로 API 비용이 다시 발생합니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('모두 지우기'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final n = await clearSubtitleCache();
+    widget.onCacheCleared?.call();
+    await _loadCacheSize();
+    if (mounted) {
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(SnackBar(content: Text('저장된 자막 $n개를 지웠습니다')));
+    }
+  }
+
   late TranslateProvider _provider = widget.settings.provider;
   // 공급자를 바꿔도 넣어 둔 키가 남도록 공급자마다 입력란을 따로 둔다
   late final _keys = {
@@ -243,6 +298,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
               ),
               const SizedBox(height: 4),
               Text('계정을 넣으면 계정의 하루 다운로드 한도를 사용합니다.', style: hint),
+              const Divider(height: 36),
+              Text('저장된 자막', style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 4),
+              Text('본 영상의 자막·번역·싱크 결과를 저장해 두고 다시 열 때 씁니다.', style: hint),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(switch (_cache) {
+                      null => '확인 중…',
+                      (files: 0, bytes: _) => '저장된 자막 없음',
+                      (:final files, :final bytes) =>
+                        '영상 $files개 · ${(bytes / 1024 / 1024).toStringAsFixed(1)}MB',
+                    }),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: (_cache?.files ?? 0) == 0 ? null : _clearCache,
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('모두 지우기'),
+                  ),
+                ],
+              ),
             ],
           ),
         ),

@@ -8,9 +8,8 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
-// "Transcue · AI 동영상 플레이어"
 static const char kWindowTitle[] =
-    "Transcue \u00B7 AI \uB3D9\uC601\uC0C1 \uD50C\uB808\uC774\uC5B4";
+    "Transcue";
 
 struct _MyApplication {
   GtkApplication parent_instance;
