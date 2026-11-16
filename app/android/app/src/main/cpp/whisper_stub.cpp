@@ -3,7 +3,7 @@
 
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_transcue_app_WhisperBridge_nativeTranscribe(
-    JNIEnv *, jobject, jstring, jstring, jstring, jint, jfloatArray) {
+    JNIEnv *, jobject, jstring, jstring, jstring, jstring, jint, jfloatArray) {
   return nullptr;
 }
 
@@ -12,6 +12,9 @@ Java_com_transcue_app_WhisperBridge_nativeSpeechSegments(
     JNIEnv *, jobject, jstring, jint, jfloatArray) {
   return nullptr;
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_transcue_app_WhisperBridge_nativeSetAbort(JNIEnv *, jobject, jboolean) {}
 
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_transcue_app_WhisperBridge_nativeParakeet(

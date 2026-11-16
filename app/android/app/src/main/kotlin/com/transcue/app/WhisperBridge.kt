@@ -21,11 +21,21 @@ class WhisperBridge(messenger: BinaryMessenger) {
     private val vadWorker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
+    /// 앱이 지금 조각을 그만두라고 했는지 ("cancel")
+    @Volatile
+    private var cancelled = false
+
     init {
         System.loadLibrary("transcue_whisper")
         MethodChannel(messenger, "transcue/whisper").setMethodCallHandler { call, result ->
             if (call.method == "speech") return@setMethodCallHandler speech(call, result)
             if (call.method == "parakeet") return@setMethodCallHandler parakeet(call, result)
+            // 재생 위치를 옮겨 지금 인식하는 조각이 필요 없어짐: 바로 멈춰 다음 조각이 기다리지 않게
+            if (call.method == "cancel") {
+                cancelled = true
+                nativeSetAbort(true)
+                return@setMethodCallHandler result.success(null)
+            }
             if (call.method != "transcribe") return@setMethodCallHandler result.notImplemented()
             val path = call.argument<String>("path")!!
             val startMs = (call.argument<Number>("startMs")!!).toLong()
@@ -33,22 +43,30 @@ class WhisperBridge(messenger: BinaryMessenger) {
             val model = call.argument<String>("model")!!
             val vad = call.argument<String>("vad")
             val lang = call.argument<String>("lang") ?: "auto"
+            // 언어 감지 확신이 낮을 때 다시 인식할 언어 (직전 구간의 언어)
+            val fallback = call.argument<String>("fallback") ?: ""
             val threads = call.argument<Int>("threads") ?: bigCores
             worker.execute {
                 try {
+                    // 앞 조각에 걸었던 멈춤을 푼다 (앱은 조각을 하나씩만 보낸다)
+                    cancelled = false
+                    nativeSetAbort(false)
                     val t0 = System.currentTimeMillis()
                     val pcm = decodeAudio(path, startMs, lengthMs)
                     val t1 = System.currentTimeMillis()
                     // 소리가 거의 없으면(영상 끝) 인식하지 않는다
-                    val bytes = if (pcm.size < SAMPLE_RATE) null
-                    else nativeTranscribe(model, vad, lang, threads, pcm)
+                    val bytes = if (pcm.size < SAMPLE_RATE || cancelled) null
+                    else nativeTranscribe(model, vad, lang, fallback, threads, pcm)
                     val t2 = System.currentTimeMillis()
-                    val text = bytes?.toString(Charsets.UTF_8)
+                    // 멈춘 조각은 '소리 없음'과 구분한다 (앱이 영상 끝으로 오해하지 않게)
+                    val aborted = cancelled
+                    val text = if (aborted) null else bytes?.toString(Charsets.UTF_8)
                     main.post {
                         result.success(
                             mapOf(
                                 "audioMs" to pcm.size * 1000L / SAMPLE_RATE,
                                 "text" to text,
+                                "aborted" to aborted,
                                 "decodeMs" to (t1 - t0),
                                 "whisperMs" to (t2 - t1),
                             ),
@@ -116,12 +134,15 @@ class WhisperBridge(messenger: BinaryMessenger) {
         }
     }
 
+    private external fun nativeSetAbort(on: Boolean)
+
     private external fun nativeParakeet(model: String, threads: Int, pcm: FloatArray): ByteArray?
 
     private external fun nativeSpeechSegments(vad: String, threads: Int, pcm: FloatArray): LongArray?
 
     private external fun nativeTranscribe(
-        model: String, vad: String?, lang: String, threads: Int, pcm: FloatArray,
+        model: String, vad: String?, lang: String, fallback: String, threads: Int,
+        pcm: FloatArray,
     ): ByteArray?
 
     companion object {

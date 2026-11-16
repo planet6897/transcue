@@ -59,6 +59,7 @@ Stream<SttEvent> transcribeRange({
       model,
       vadModel,
       language,
+      fallbackLanguage,
       threads,
     );
     return;
@@ -93,6 +94,18 @@ Stream<SttEvent> transcribeRange({
     'extract ${extractMs}ms ${parakeetModel != null ? 'parakeet' : 'whisper'} '
     '${watch.elapsedMilliseconds - extractMs}ms',
   );
+}
+
+/// Android: 지금 인식 중인 조각을 멈춘다 (재생 위치를 옮겨 필요 없어졌을 때).
+/// 멈추지 않으면 다음 조각이 앞 조각이 끝날 때까지(태블릿 10~15초) 기다린다.
+/// 데스크톱은 구독을 끊으면 whisper-cli가 바로 끝난다.
+Future<void> cancelTranscribe() async {
+  if (!_androidSpeech) return;
+  try {
+    await _channel.invokeMethod<void>('cancel');
+  } on PlatformException catch (e) {
+    debugPrint('[stt] cancel failed: $e');
+  }
 }
 
 /// 이 기기에서 말소리 구간을 찾을 수 있는지 (재생 중 싱크 확인)
@@ -160,7 +173,8 @@ Stream<SttEvent> _transcribeAndroid(
   Duration length,
   File model,
   File? vad,
-  String language, [
+  String language,
+  String? fallbackLanguage, [
   int? threads,
 ]) async* {
   final r = await _channel.invokeMapMethod<String, Object?>('transcribe', {
@@ -170,6 +184,8 @@ Stream<SttEvent> _transcribeAndroid(
     'model': model.path,
     'vad': vad?.path,
     'lang': language,
+    // 감지 확신이 낮고 이 언어와 다르면 이 언어로 다시 인식 (데스크톱과 같은 규칙)
+    'fallback': ?fallbackLanguage,
     // 생략 → 빠른 코어 수 (WhisperBridge.bigCores)
     'threads': ?threads,
   });
@@ -177,6 +193,8 @@ Stream<SttEvent> _transcribeAndroid(
     '[stt] android ${start.inSeconds}s+${length.inSeconds}s: '
     'audio ${r?['audioMs']}ms decode ${r?['decodeMs']}ms whisper ${r?['whisperMs']}ms',
   );
+  // 앱이 멈춘 조각 (재생 위치 이동): 소리 없음(영상 끝)이 아니다
+  if (r?['aborted'] == true) return;
   final text = r?['text'] as String?;
   if (text == null) {
     yield SttEnd();

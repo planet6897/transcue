@@ -113,6 +113,36 @@ String mergeSpokenLang(String? current, String detected) =>
 bool isSeek(Duration moved, Duration elapsed) =>
     (moved - elapsed).abs() > const Duration(seconds: 3);
 
+/// 인식된 구간 [covered]에서 자막([cues])이 한 줄도 없이 [maxEmptyMs]보다 길게 이어지는 곳을
+/// 뺀다 (그곳은 다시 인식한다). 앞뒤 자막이 있는 곳까지는 남긴다.
+List<(int, int)> trimEmptyCovered(
+  List<(int, int)> covered,
+  List<BilingualCue> cues,
+  int maxEmptyMs,
+) {
+  final sorted = [...cues]..sort((x, y) => x.start.compareTo(y.start));
+  final out = <(int, int)>[];
+  for (final (a, b) in covered) {
+    var segStart = a, pos = a;
+    for (final c in sorted) {
+      final s = c.start.inMilliseconds, e = c.end.inMilliseconds;
+      if (e <= a) continue;
+      if (s >= b) break;
+      if (s - pos > maxEmptyMs) {
+        if (pos > segStart) out.add((segStart, pos));
+        segStart = s;
+      }
+      if (e > pos) pos = e > b ? b : e;
+    }
+    if (b - pos > maxEmptyMs) {
+      if (pos > segStart) out.add((segStart, pos));
+    } else {
+      out.add((segStart, b));
+    }
+  }
+  return out;
+}
+
 /// 시작할 때 싱크를 재는 방법: 한 번에 받아 적는 길이, 근거가 모자랄 때 다음 구간으로
 /// 옮겨 다시 재는 횟수, Android에서 쓸 스레드 수(null = 빠른 코어 전부).
 ///
@@ -204,6 +234,16 @@ class SubtitleJob extends ChangeNotifier {
 
   /// Android에서 재생 위치보다 이만큼 넘게 앞은 미리 인식하지 않는다
   static const _androidAheadMs = 3 * 60 * 1000;
+
+  /// 이보다 짧은 미인식 틈은 인식하지 않고 채운다 (1초 미만 소리는 '영상 끝'으로 읽힌다)
+  static const _minGapMs = 2000;
+
+  /// 소리가 없다고 나온 조각이 영상 끝에서 이만큼 안이면 영상 끝으로 본다
+  static const _endSlackMs = 5000;
+
+  /// 저장된 인식 구간 중 자막이 한 줄도 없이 이만큼 넘게 이어지는 곳은 다시 인식한다
+  /// (예전 버전이 짧은 조각을 '영상 끝'으로 잘못 보고 끝까지 인식된 것으로 저장한 것을 고친다)
+  static const _emptyCoveredMs = 3 * 60 * 1000;
 
   // ---- 진행 상태 ----
 
@@ -382,6 +422,17 @@ class SubtitleJob extends ChangeNotifier {
       }
       for (final c in (j['covered'] as List? ?? []).cast<List>()) {
         _addCovered((c[0] as num).toInt(), (c[1] as num).toInt());
+      }
+      // 자막 없이 길게 '인식됨'으로 저장된 곳은 다시 인식한다
+      if (originalFrom == fromStt && _covered.isNotEmpty) {
+        final trimmed = trimEmptyCovered(_covered, saved, _emptyCoveredMs);
+        if (!listEquals(trimmed, _covered)) {
+          debugPrint('[cache] re-recognize empty ranges: $_covered → $trimmed');
+          _covered
+            ..clear()
+            ..addAll(trimmed);
+          _complete = false;
+        }
       }
       _fromCache = true;
       _setCues(saved);
@@ -1447,6 +1498,14 @@ class SubtitleJob extends ChangeNotifier {
         final jumped =
             _leadMs == 0 && (lastEnd == null || (start - lastEnd).abs() > 1000);
         final stop = _nextCoveredStart(start, total);
+        // 인식된 구간 사이의 아주 짧은 틈(2초 미만)은 인식하지 않고 채운다.
+        // 1초도 안 되는 소리는 '소리 없음(영상 끝)'으로 돌아와, 그 뒤 전체가 인식된 것으로
+        // 잘못 표시되었다 (태블릿: 26초→26초 조각 뒤로 영상 끝까지 자막이 생기지 않음)
+        if (stop < total && stop - start < _minGapMs) {
+          _addCovered(start, stop);
+          lastEnd = null;
+          continue;
+        }
         final hardEnd = [
           start + (jumped ? _firstChunkMs : _chunkMs),
           stop,
@@ -1497,6 +1556,8 @@ class SubtitleJob extends ChangeNotifier {
               '[stt] seek to ${ph.inSeconds}s: abort chunk ${start ~/ 1000}s',
             );
             aborted.complete();
+            // whisper 조각만 멈출 수 있다 (Parakeet은 끝까지 돈다)
+            if (!useParakeet) unawaited(cancelTranscribe());
           }
         };
         final sub =
@@ -1587,8 +1648,13 @@ class SubtitleJob extends ChangeNotifier {
             ? (took + 2000).clamp(0, 90000)
             : 0;
         if (ended) {
-          // 소리가 끝남. 재생 위치부터 시작했다면 앞부분이 남아 있으므로 계속한다
-          _addCovered(start, total);
+          // 소리가 없음. 영상 끝 근처(또는 길이를 모름)일 때만 끝까지 인식된 것으로 본다.
+          // 중간이면 이 조각만 채운다 (소리가 짧게 읽혔을 뿐 뒤에는 아직 말이 있다)
+          final atEnd = duration == null ||
+              duration <= Duration.zero ||
+              readEnd >= total - _endSlackMs;
+          _addCovered(start, atEnd ? total : readEnd);
+          // 재생 위치부터 시작했다면 앞부분이 남아 있으므로 계속한다
           continue;
         }
         // 마지막 문장이 조각 끝을 넘었으면 그 문장 끝까지를 인식된 구간으로
