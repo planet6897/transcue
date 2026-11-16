@@ -240,6 +240,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
     AppSettings.load().then((s) {
       setState(() => _settings = s);
+      _rateShown.value = s.playbackRate;
       _view.showVocab = s.showVocab;
       _publishPlayInfo();
       // 개발용: DUALCUE_OPEN=<파일 경로> 로 실행하면 바로 연다 (실기기 자동 검증용)
@@ -277,6 +278,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _uiChanged.dispose();
     _flashTimer?.cancel();
     _flash.dispose();
+    _rateShown.dispose();
     _centerHintTimer?.cancel();
     _centerHint.dispose();
     _tvMenuShown.dispose();
@@ -438,6 +440,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final loaded = _durationLoaded();
     await _player.open(Media(path));
     _switching = false;
+    await _applyRate();
     // 자막 작업은 재생 위치부터 시작하므로 이어 보기 위치로 먼저 옮긴다
     await _resumeAt(PlaybackPositions.keyForPath(path), loaded);
     _startJob(LocalFileSource(path));
@@ -557,6 +560,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           .firstWhere((d) => d > Duration.zero)
           .timeout(const Duration(seconds: 30));
       await _player.open(Media(media.videoUrl, httpHeaders: media.httpHeaders));
+      await _applyRate();
       if (media.audioUrl != null) {
         await loaded;
         await _player.setAudioTrack(AudioTrack.uri(media.audioUrl!));
@@ -1205,6 +1209,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     const SingleActivator(LogicalKeyboardKey.keyV): _toggleVocab,
     const SingleActivator(LogicalKeyboardKey.keyR): _cyclePlayMode,
     const SingleActivator(LogicalKeyboardKey.keyL): _toggleSentenceLoop,
+    // Shift+, / Shift+. 는 자판에 따라 논리 키가 달라 글자로 받는다
+    const CharacterActivator('<'): () => _stepRate(-1),
+    const CharacterActivator('>'): () => _stepRate(1),
     const SingleActivator(LogicalKeyboardKey.keyA): _markRangeStart,
     const SingleActivator(LogicalKeyboardKey.keyB): _markRangeEnd,
     const SingleActivator(LogicalKeyboardKey.keyR, shift: true): _resetCount,
@@ -1397,8 +1404,109 @@ class _PlayerScreenState extends State<PlayerScreen> {
       const MaterialDesktopVolumeButton(),
       const MaterialDesktopPositionIndicator(),
       const Spacer(),
+      _rateButton(desktop: true),
       const MaterialDesktopFullscreenButton(),
     ],
+  );
+
+  // ---- 재생 속도 ----
+
+  /// 고를 수 있는 재생 속도
+  static const _rates = [0.5, 0.75, 0.9, 1.0, 1.25, 1.5, 2.0];
+
+  static String _rateLabel(double r) {
+    var t = r.toStringAsFixed(2);
+    while (t.endsWith('0')) {
+      t = t.substring(0, t.length - 1);
+    }
+    if (t.endsWith('.')) t = t.substring(0, t.length - 1);
+    return '${t}x';
+  }
+
+  /// 조작부의 속도 버튼은 한 번 만든 위젯이라 값이 바뀌면 이것으로 다시 그린다
+  final _rateShown = ValueNotifier<double>(1.0);
+
+  /// 속도를 바꿀 때 소리를 늘이는 방식. mpv 기본 scaletempo2(창 20ms)는 느리게 들으면
+  /// 말소리가 울리고 끊겨, 창을 40ms로 늘렸다 (20·40·60ms·scaletempo를 들어 보고 고름).
+  /// 이 앱의 mpv에는 Rubber Band가 없다. 보통 속도에서는 필터를 넣지 않는다.
+  static const _speechStretch = 'scaletempo2=window-size=40:search-interval=40';
+
+  Future<void> _applyStretch(double rate) async {
+    final native = _player.platform;
+    if (native is NativePlayer) {
+      await native.setProperty('af', rate == 1.0 ? '' : _speechStretch);
+    }
+  }
+
+  Future<void> _applyRate() async {
+    final r = _settings.playbackRate;
+    _rateShown.value = r;
+    await _applyStretch(r);
+    if (_player.state.rate != r) await _player.setRate(r);
+  }
+
+  Future<void> _setRate(double r) async {
+    _settings.playbackRate = r;
+    _rateShown.value = r;
+    await _applyStretch(r);
+    await _player.setRate(r);
+    _toast('재생 속도 ${_rateLabel(r)} (< >)');
+    await _settings.save();
+  }
+
+  /// < / > 키: 한 단계 느리게 / 빠르게
+  void _stepRate(int step) {
+    final now = _settings.playbackRate;
+    var i = _rates.indexWhere((r) => r >= now - 0.001);
+    if (i < 0) i = _rates.length - 1;
+    final next = (i + step).clamp(0, _rates.length - 1);
+    if (_rates[next] != now) unawaited(_setRate(_rates[next]));
+  }
+
+  /// 아래 조작부의 속도 버튼 (누르면 속도 목록)
+  Widget _rateButton({required bool desktop}) => ValueListenableBuilder(
+    valueListenable: _rateShown,
+    builder: (button, r, _) {
+      final label = Text(
+        _rateLabel(r),
+        style: TextStyle(
+          fontSize: desktop ? 14 : 16,
+          fontWeight: FontWeight.w600,
+          color: r == 1.0 ? Colors.white : const Color(0xFF80DEEA),
+        ),
+      );
+      Future<void> pick() async {
+        final box = button.findRenderObject()! as RenderBox;
+        final overlay =
+            Navigator.of(button).overlay!.context.findRenderObject()!
+                as RenderBox;
+        final picked = await showMenu<double>(
+          context: button,
+          position: RelativeRect.fromRect(
+            box.localToGlobal(Offset.zero, ancestor: overlay) & box.size,
+            Offset.zero & overlay.size,
+          ),
+          items: [
+            for (final x in _rates)
+              CheckedPopupMenuItem(
+                value: x,
+                checked: x == r,
+                child: Text(x == 1.0 ? '보통 (1x)' : _rateLabel(x)),
+              ),
+          ],
+        );
+        if (picked != null && mounted) await _setRate(picked);
+      }
+
+      return ExcludeFocus(
+        child: Tooltip(
+          message: '재생 속도 (< 느리게, > 빠르게)',
+          child: desktop
+              ? MaterialDesktopCustomButton(icon: label, onPressed: pick)
+              : MaterialCustomButton(icon: label, onPressed: pick),
+        ),
+      );
+    },
   );
 
   // 버튼이 포커스를 가져가면 Space/Enter가 재생/일시정지 대신 버튼을 누르게 된다
@@ -1454,10 +1562,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           _touchPlayArea(flex: 2, doubleTapSeconds: 10),
         ],
-        bottomButtonBar: const [
-          MaterialPositionIndicator(),
-          Spacer(),
-          MaterialFullscreenButton(),
+        bottomButtonBar: [
+          const MaterialPositionIndicator(),
+          const Spacer(),
+          _rateButton(desktop: false),
+          const MaterialFullscreenButton(),
         ],
         buttonBarButtonSize: 28,
         seekBarMargin: EdgeInsets.fromLTRB(16, 0, 16, bottom),
