@@ -727,36 +727,109 @@ class _PlayerScreenState extends State<PlayerScreen> {
     unawaited(_job?.retranslate());
   }
 
-  // ---- 문장 반복 ----
+  // ---- 문장·구간 반복 ----
 
-  /// 문장 반복 켜기/끄기 (L)
-  void _toggleSentenceLoop() =>
-      _setSentenceLoop(_sentenceLoop == null ? _sentenceRepeat : null);
+  /// 반복할 구간의 크기 (메뉴에서 고른 값, L로 켤 때 쓴다)
+  var _loopSpan = LoopSpan.one;
 
-  /// [repeat]으로 문장 반복을 켠다. null이면 끈다.
-  void _setSentenceLoop(SentenceRepeat? repeat) {
-    if (repeat == null) {
-      _sentenceLoopSub?.cancel();
-      _sentenceLoopSub = null;
-      setState(() => _sentenceLoop = null);
-      _toast('문장 반복 꺼짐 (L)');
+  /// A 키로 정한 구간 시작 (B를 누르기 전)
+  Duration? _markA;
+
+  /// 마지막으로 정한 A–B 구간 (메뉴에서 '직접 지정'을 다시 고르면 이것을 반복)
+  (Duration, Duration)? _lastRange;
+
+  /// 문장·구간 반복 켜기/끄기 (L)
+  void _toggleSentenceLoop() {
+    if (_sentenceLoop != null) {
+      _stopLoop();
+    } else {
+      _startLoop();
+    }
+  }
+
+  void _stopLoop([String message = '반복 꺼짐 (L)']) {
+    _sentenceLoopSub?.cancel();
+    _sentenceLoopSub = null;
+    setState(() => _sentenceLoop = null);
+    _toast(message);
+  }
+
+  String _loopLabel(SentenceLoop loop) => switch (loop.range) {
+    (final a, final b) =>
+      '구간 ${formatPosition(a)}~${formatPosition(b)} · ${loop.repeat.label}',
+    null =>
+      '${LoopSpan.values.firstWhere((x) => x.sentences == loop.sentences, orElse: () => LoopSpan.one).label} · ${loop.repeat.label}',
+  };
+
+  /// 지금 고른 크기·횟수로 반복을 켠다 (이미 켜져 있으면 바꾼다)
+  void _startLoop() {
+    final repeat = _sentenceRepeat;
+    if (_loopSpan == LoopSpan.custom) {
+      final r = _lastRange;
+      if (r == null) {
+        _toast('구간 시작에서 A, 끝에서 B 키를 누르면 그 구간을 반복합니다');
+        return;
+      }
+      _startRange(r.$1, r.$2);
       return;
     }
-    _sentenceRepeat = repeat;
     final loop = _sentenceLoop;
-    if (loop != null) {
-      setState(() => loop.repeat = repeat);
+    if (loop != null && loop.range == null) {
+      setState(() {
+        loop
+          ..repeat = repeat
+          ..sentences = _loopSpan.sentences;
+      });
     } else {
-      final created = SentenceLoop(repeat)
+      _sentenceLoopSub?.cancel();
+      final created = SentenceLoop(repeat, sentences: _loopSpan.sentences)
         ..lockAt(_view.cues, _player.state.position);
       setState(() => _sentenceLoop = created);
       _sentenceLoopSub = _player.stream.position.listen(_onLoopPosition);
     }
+    final now = _sentenceLoop!;
     _toast(
       _view.cues.isEmpty
-          ? '문장 반복 켜짐 · ${repeat.label} (자막이 생기면 반복합니다)'
-          : '문장 반복 켜짐 · ${repeat.label} (L)',
+          ? '반복 켜짐 · ${_loopLabel(now)} (자막이 생기면 반복합니다)'
+          : '반복 켜짐 · ${_loopLabel(now)} (L)',
     );
+  }
+
+  /// [a]~[b] 구간 반복을 켜고 시작(A)으로 간다
+  void _startRange(Duration a, Duration b) {
+    _sentenceLoopSub?.cancel();
+    final created = SentenceLoop.range(_sentenceRepeat, a, b);
+    setState(() {
+      _sentenceLoop = created;
+      _loopSpan = LoopSpan.custom;
+      _lastRange = (a, b);
+    });
+    _sentenceLoopSub = _player.stream.position.listen(_onLoopPosition);
+    unawaited(_player.seek(a));
+    _toast('반복 켜짐 · ${_loopLabel(created)} (L)');
+  }
+
+  /// A 키: 지금 위치를 구간 시작으로
+  void _markRangeStart() {
+    final pos = _player.state.position;
+    setState(() => _markA = pos);
+    _toast('구간 시작 A ${formatPosition(pos)} · 끝에서 B 키를 누르세요');
+  }
+
+  /// B 키: 지금 위치를 구간 끝으로 정하고 A–B 반복을 켠다
+  void _markRangeEnd() {
+    final a = _markA;
+    final b = _player.state.position;
+    if (a == null) {
+      _toast('먼저 구간 시작에서 A 키를 누르세요');
+      return;
+    }
+    if (b - a < const Duration(milliseconds: 500)) {
+      _toast('구간 끝(B)은 시작(A)보다 뒤여야 합니다');
+      return;
+    }
+    _markA = null;
+    _startRange(a, b);
   }
 
   void _onLoopPosition(Duration pos) {
@@ -773,66 +846,94 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
       unawaited(_player.seek(back));
     }
+    if (loop.finished) {
+      _stopLoop('구간 반복을 마쳤습니다 (${loop.repeat.label})');
+      return;
+    }
     // 몇 번째 듣는지 버튼에 보여 준다 (바뀔 때만 다시 그린다)
     if (before != (loop.cue, loop.round) && mounted) setState(() {});
   }
 
-  /// 문장 반복 버튼: 횟수를 고르거나 끈다
+  /// 반복 버튼: 구간 크기·횟수를 고르거나 끈다
   Future<void> _showSentenceLoopMenu(BuildContext button) async {
     final box = button.findRenderObject()! as RenderBox;
     final overlay =
         Navigator.of(button).overlay!.context.findRenderObject()! as RenderBox;
-    final on = _sentenceLoop?.repeat;
-    final picked = await showMenu<SentenceRepeat?>(
+    final loop = _sentenceLoop;
+    final span = loop == null
+        ? null
+        : loop.range != null
+        ? LoopSpan.custom
+        : _loopSpan;
+    final range = _lastRange;
+    final picked = await showMenu<Object>(
       context: button,
       position: RelativeRect.fromRect(
         box.localToGlobal(Offset.zero, ancestor: overlay) & box.size,
         Offset.zero & overlay.size,
       ),
       items: [
+        const PopupMenuItem(enabled: false, height: 32, child: Text('반복 구간')),
+        for (final x in LoopSpan.values)
+          CheckedPopupMenuItem(
+            value: x,
+            checked: span == x,
+            child: Text(
+              x == LoopSpan.custom && range != null
+                  ? '${x.label} ${formatPosition(range.$1)}~${formatPosition(range.$2)}'
+                  : x.label,
+            ),
+          ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(enabled: false, height: 32, child: Text('반복 횟수')),
         for (final r in SentenceRepeat.values)
           CheckedPopupMenuItem(
             value: r,
-            checked: on == r,
+            checked: loop != null && loop.repeat == r,
             child: Text(r.label),
           ),
-        if (on != null) ...[
+        if (loop != null) ...[
           const PopupMenuDivider(),
-          PopupMenuItem(
-            value: null,
-            onTap: () => _menuPickedOff = true,
-            child: const Text('끄기'),
-          ),
+          const PopupMenuItem(value: _loopOff, child: Text('끄기')),
         ],
       ],
     );
-    // 메뉴 밖을 눌러 닫으면 picked도 null이므로, 끄기는 켜져 있을 때 고른 경우만
-    if (!mounted) return;
-    if (picked != null) {
-      _setSentenceLoop(picked);
-    } else if (on != null && _menuPickedOff) {
-      _setSentenceLoop(null);
+    if (!mounted || picked == null) return;
+    switch (picked) {
+      case LoopSpan x:
+        _loopSpan = x;
+        _startLoop();
+      case SentenceRepeat r:
+        _sentenceRepeat = r;
+        final now = _sentenceLoop;
+        if (now == null) {
+          _startLoop();
+        } else {
+          setState(() => now.repeat = r);
+          _toast('반복 켜짐 · ${_loopLabel(now)} (L)');
+        }
+      case _loopOff:
+        _stopLoop();
     }
-    _menuPickedOff = false;
   }
 
-  /// '끄기'를 골랐는지 (메뉴 밖을 눌러 닫은 것과 구별)
-  var _menuPickedOff = false;
+  static const _loopOff = 'off';
 
   Widget _sentenceLoopButton() {
     final loop = _sentenceLoop;
     final times = loop?.repeat.times;
     final tip = loop == null
-        ? '문장 반복 꺼짐 (L)'
-        : '문장 반복 켜짐 · ${loop.repeat.label} (L)';
+        ? '문장·구간 반복 꺼짐 (L, 구간: A·B)'
+        : '반복 켜짐 · ${_loopLabel(loop)} (L)';
     final icon = Icon(
       Icons.loop,
       color: loop == null ? null : const Color(0xFF80DEEA),
     );
+    final counting = loop != null && (loop.cue != null || loop.range != null);
     return Builder(
       builder: (button) => IconButton(
         tooltip: tip,
-        icon: loop == null || loop.cue == null
+        icon: !counting
             ? icon
             : Badge(
                 label: Text(
@@ -1040,6 +1141,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     const SingleActivator(LogicalKeyboardKey.keyV): _toggleVocab,
     const SingleActivator(LogicalKeyboardKey.keyR): _cyclePlayMode,
     const SingleActivator(LogicalKeyboardKey.keyL): _toggleSentenceLoop,
+    const SingleActivator(LogicalKeyboardKey.keyA): _markRangeStart,
+    const SingleActivator(LogicalKeyboardKey.keyB): _markRangeEnd,
     const SingleActivator(LogicalKeyboardKey.keyR, shift: true): _resetCount,
     // 처음부터
     const SingleActivator(LogicalKeyboardKey.home): () =>
