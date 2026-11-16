@@ -233,6 +233,39 @@ void main() {
       expect(m.original?.url, 'https://subs/en.vtt');
     });
 
+    test('자동 더빙 영상의 받아쓰기 자막이 여럿이면 원본 소리 언어의 것을 원어로 고른다', () {
+      // 실사례 ocTIMkS1MGg: 더빙 21개마다 '<lang>-orig'가 있고 알파벳순 첫 번째가 ar
+      Map<String, dynamic> audio(String id, String note, String lang, num p) =>
+          {
+            ...fmt(id, a: 'mp4a', tbr: 130),
+            'format_note': note,
+            'language': lang,
+            'language_preference': p,
+          };
+      final m = YoutubeMedia.fromInfoJson({
+        ...info,
+        'formats': [
+          fmt('137', h: 1080, v: 'avc1', tbr: 4000),
+          audio('140-0', 'Arabic (dubbed-auto), medium', 'ar', -1),
+          audio(
+            '140-1',
+            'English (United States) original (default), medium',
+            'en-US',
+            10,
+          ),
+        ],
+        'language': 'en-US',
+        'automatic_captions': {
+          'ar-orig': subs('ar-orig'),
+          'en-orig': subs('en-orig'),
+          'ko': subs('ko'),
+        },
+        'subtitles': <String, dynamic>{},
+      });
+      expect(m.language, 'en');
+      expect(m.original?.lang, 'en-orig');
+    });
+
     test('재생 가능한 포맷이 없으면 예외', () {
       expect(
         () => YoutubeMedia.fromInfoJson({'id': 'x', 'formats': []}),

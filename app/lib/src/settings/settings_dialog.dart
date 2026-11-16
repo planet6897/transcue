@@ -4,6 +4,8 @@ import '../app_version.dart';
 import '../pipeline/stt_engine.dart' show canUseParakeet;
 import '../pipeline/subtitle_job.dart'
     show clearSubtitleCache, subtitleCacheSize;
+import '../update/update_dialog.dart';
+import '../update/updater.dart' show checkForUpdate;
 import 'app_settings.dart';
 
 /// 설정 화면: 번역 공급자·API 키·모델, 음성 인식 모델.
@@ -24,6 +26,25 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
+  bool _checking = false;
+
+  Future<void> _checkUpdate() async {
+    setState(() => _checking = true);
+    final r = await checkForUpdate(force: true);
+    if (!mounted) return;
+    setState(() => _checking = false);
+    if (r == null) {
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(const SnackBar(content: Text('최신 버전입니다')));
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (_) => UpdateDialog(release: r),
+    );
+  }
+
   /// 저장된 자막 개수·크기 (읽는 중이면 null)
   ({int files, int bytes})? _cache;
 
@@ -177,6 +198,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
           const Spacer(),
           // 문제를 알릴 때 어느 버전인지 알 수 있게
           Text('Transcue $appVersionLabel', style: hint),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: _checking ? null : _checkUpdate,
+            child: Text(_checking ? '확인 중…' : '업데이트 확인'),
+          ),
         ],
       ),
       content: SizedBox(

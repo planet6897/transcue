@@ -161,12 +161,19 @@ class YoutubeMedia {
     final auto = _tracks(info['automatic_captions'], auto: true);
     // 실제 음성 언어: 자동 자막의 '<lang>-orig'(음성을 받아 적은 것) → 원본 소리 트랙의 언어
     // → 영상 정보의 언어(올린 사람이 적은 값이라 틀릴 수 있다)
-    final spoken = auto.keys
-        .where((k) => k.endsWith('-orig'))
-        .map((k) => k.substring(0, k.length - '-orig'.length))
-        .firstOrNull;
+    // 자동 더빙 영상은 더빙 소리마다 '<lang>-orig'가 있어(실사례: 21개, 알파벳순 첫 번째가 ar)
+    // 하나일 때만 믿고, 여럿이면 원본 소리 트랙 → 영상 정보의 언어 순으로 고른다
+    final origLangs = [
+      for (final k in auto.keys)
+        if (k.endsWith('-orig')) k.substring(0, k.length - '-orig'.length),
+    ];
     audioLanguage = audioLanguage?.split('-').first;
-    final language = spoken ?? audioLanguage ?? info['language'] as String?;
+    final infoLanguage = (info['language'] as String?)?.split('-').first;
+    final language = origLangs.length == 1
+        ? origLangs.single
+        : audioLanguage ??
+              infoLanguage ??
+              (origLangs.isEmpty ? null : origLangs.first);
 
     CaptionTrack? pick(Map<String, CaptionTrack> m, bool Function(String) ok) {
       for (final e in m.entries) {

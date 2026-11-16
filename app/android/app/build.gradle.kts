@@ -53,3 +53,8 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // 업데이트 APK를 설치 화면에 넘길 때 FileProvider (content:// 주소)
+    implementation("androidx.core:core:1.13.1")
+}
