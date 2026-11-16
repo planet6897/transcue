@@ -140,6 +140,7 @@ class AppSettings {
     this.osUsername = '',
     this.osPassword = '',
     this.showVocab = false,
+    this.playbackRate = 1.0,
     this.vocabLevel = VocabLevel.intermediate,
     this.autoPlayNext = true,
     this.repeatVideo = false,
@@ -153,6 +154,9 @@ class AppSettings {
 
   /// 학습 단어 표시 (켜져 있을 때만 단어를 만든다 — 번역 API 비용)
   bool showVocab;
+
+  /// 재생 속도 (1.0 = 보통). 다음 영상에도 그대로 쓴다
+  double playbackRate;
   VocabLevel vocabLevel;
 
   String claudeApiKey;
@@ -239,6 +243,7 @@ class AppSettings {
         osUsername: j['osUsername'] as String? ?? '',
         osPassword: j['osPassword'] as String? ?? '',
         showVocab: j['showVocab'] == true,
+        playbackRate: (j['playbackRate'] as num?)?.toDouble() ?? 1.0,
         vocabLevel: VocabLevel.values.firstWhere(
           (m) => m.name == j['vocabLevel'],
           orElse: () => VocabLevel.intermediate,
@@ -268,6 +273,7 @@ class AppSettings {
         'osUsername': osUsername.trim(),
         'osPassword': osPassword,
         'showVocab': showVocab,
+        'playbackRate': playbackRate,
         'vocabLevel': vocabLevel.name,
         'autoPlayNext': autoPlayNext,
         'repeatVideo': repeatVideo,
