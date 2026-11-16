@@ -413,6 +413,12 @@ class SubtitleJob extends ChangeNotifier {
         for (final c in (j['cues'] as List).cast<Map<String, dynamic>>())
           _repairSaved(BilingualCue.fromJson(c)),
       ];
+      // 예전에 저장한 음성 인식 자막도 말이 끝나면 닫히게
+      if (originalFrom == fromStt) {
+        for (var i = 0; i < saved.length; i++) {
+          saved[i] = trimLingeringEnd(saved[i]);
+        }
+      }
       if (source case LocalFileSource(:final path) when _complete) {
         // 예전에 잘못 받은 인터넷 자막 등: 영상 길이와 안 맞으면 버리고 다시 만든다
         if (!fitsDuration(saved, (await _probe(path)).duration)) {
@@ -1588,7 +1594,8 @@ class SubtitleJob extends ChangeNotifier {
                     final e = c.end.inMilliseconds;
                     if (e > lastCueEnd) lastCueEnd = e > readEnd ? readEnd : e;
                     if (e > doneUntil) doneUntil = e > hardEnd ? hardEnd : e;
-                    _insertCue(c);
+                    // 말이 끝났는데 자막이 오래 남지 않게 (인식 구간은 원래 끝으로 센다)
+                    _insertCue(trimLingeringEnd(c));
                     _kickTranslation(); // 구간이 끝나길 기다리지 않고 바로 번역
                   case SttProgress(:final fraction):
                     final p =
