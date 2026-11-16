@@ -112,4 +112,25 @@ void main() {
       ..lockAt([cue(0.2, 2, 'X')], s(1));
     expect(loop.onPosition([cue(0.2, 2, 'X')], s(2.3)), Duration.zero);
   });
+
+  test('두 문장씩: 두 번째 문장 끝에서 첫 문장 앞으로, 다 들으면 다음 두 문장', () {
+    final loop = SentenceLoop(SentenceRepeat.two, sentences: 2)
+      ..lockAt(cues, s(15.5));
+    // B(15~17)+C(17.3~19) 묶음을 두 번 듣고, 다음 묶음 D를 두 번 듣는다
+    expect(play(loop, 15.5, 40), [s(14.5), s(29.5)]);
+  });
+
+  test('A–B 구간: 끝에서 시작으로, 정한 횟수를 들으면 끝난다', () {
+    final loop = SentenceLoop.range(SentenceRepeat.three, s(11), s(16));
+    expect(play(loop, 11, 25), [s(11), s(11)]);
+    expect(loop.finished, isTrue);
+  });
+
+  test('A–B 구간은 문장 이동으로 바뀌지 않고, 구간 밖에서는 건드리지 않는다', () {
+    final loop = SentenceLoop.range(SentenceRepeat.forever, s(11), s(16))
+      ..lockAt(cues, s(30));
+    expect(loop.range, (s(11), s(16)));
+    expect(loop.onPosition(cues, s(31)), isNull);
+    expect(loop.onPosition(cues, s(16.1)), s(11));
+  });
 }
