@@ -132,6 +132,39 @@ bool isBrokenKorean(String text) =>
     RegExp(r'[\u0080-\u00ff\ufffd]').hasMatch(text) &&
     !RegExp(r'[\uac00-\ud7a3]').hasMatch(text);
 
+/// 음성 인식 자막의 끝을 말이 끝날 무렵으로 줄인다.
+/// whisper는 문장 끝을 뒤따르는 침묵까지(흔히 다음 문장 시작까지) 늘려 잡아,
+/// 말이 멈춘 뒤에도 자막이 오래 남았다. 글자 수로 말하는 데 걸릴 시간을 어림잡고
+/// 그보다 넉넉히(1.4배 + 0.8초, 최소 1.5초) 보여 준 뒤 닫는다.
+/// (한·중·일 글자 1자 ≈ 0.16초, 그 밖의 글자·숫자 1자 ≈ 0.065초)
+BilingualCue trimLingeringEnd(BilingualCue c) {
+  var speakMs = 0;
+  for (final r in c.original.runes) {
+    final ch = String.fromCharCode(r);
+    if (_cjk.hasMatch(ch)) {
+      speakMs += 160;
+    } else if (_letterOrDigit.hasMatch(ch)) {
+      speakMs += 65;
+    }
+  }
+  final showMs = (speakMs * 1.4 + 800).round();
+  final maxEnd = c.start + Duration(milliseconds: showMs < 1500 ? 1500 : showMs);
+  if (c.end <= maxEnd) return c;
+  return BilingualCue(
+    start: c.start,
+    end: maxEnd,
+    original: c.original,
+    translation: c.translation,
+    words: c.words,
+    provisional: c.provisional,
+  );
+}
+
+final _cjk = RegExp(
+  r'[぀-ヿ㐀-䶿一-鿿가-힣ｦ-ﾟ]',
+);
+final _letterOrDigit = RegExp(r'[\p{L}\p{N}]', unicode: true);
+
 /// 재생 위치에 표시할 큐를 찾는다. (큐는 start 기준 정렬되어 있다고 가정)
 ///
 /// [linger]: 자막이 끝난 뒤 더 보여 줄 시간. 단, 다음 자막이 시작하면 거기서 끝낸다.

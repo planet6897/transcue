@@ -45,7 +45,7 @@ class WhisperBridge(messenger: BinaryMessenger) {
             val lang = call.argument<String>("lang") ?: "auto"
             // 언어 감지 확신이 낮을 때 다시 인식할 언어 (직전 구간의 언어)
             val fallback = call.argument<String>("fallback") ?: ""
-            val threads = call.argument<Int>("threads") ?: bigCores
+            val threads = call.argument<Int>("threads") ?: sttThreads
             worker.execute {
                 try {
                     // 앞 조각에 걸었던 멈춤을 푼다 (앱은 조각을 하나씩만 보낸다)
@@ -104,7 +104,7 @@ class WhisperBridge(messenger: BinaryMessenger) {
         val startMs = (call.argument<Number>("startMs")!!).toLong()
         val lengthMs = (call.argument<Number>("lengthMs")!!).toLong()
         val model = call.argument<String>("model")!!
-        val threads = call.argument<Int>("threads") ?: bigCores
+        val threads = call.argument<Int>("threads") ?: sttThreads
         // whisper와 같은 일꾼: 둘이 동시에 돌면 느린 기기에서 서로 기다리기만 한다
         worker.execute {
             try {
@@ -150,6 +150,11 @@ class WhisperBridge(messenger: BinaryMessenger) {
 
         /// 빠른 코어 수. 느린 코어까지 쓰면 연산마다 느린 코어를 기다려 전체가 느려진다
         /// (갤럭시 탭 S9: 3.36GHz×1 + 2.8GHz×4 + 2.0GHz×3 → 5)
+        /// 재생 중 음성 인식에 쓰는 스레드: 빠른 코어 하나는 영상 재생(mpv·화면 그리기)에 남긴다.
+        /// 빠른 코어를 모두 쓰면 인식하는 동안 영상이 슬로모션처럼 느려졌다
+        /// (갤럭시 탭 S9, 같은 형식의 영상이 인식할 때만 느리고 인식이 없을 때는 정상)
+        val sttThreads: Int by lazy { if (bigCores >= 4) bigCores - 1 else bigCores }
+
         val bigCores: Int by lazy {
             val freqs = (0 until Runtime.getRuntime().availableProcessors()).mapNotNull {
                 runCatching {
