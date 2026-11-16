@@ -13,7 +13,10 @@ import 'package:media_kit_video/media_kit_video.dart';
 import '../pipeline/stt_engine.dart' show canTranscribe;
 import '../pipeline/subtitle_job.dart';
 import '../settings/app_settings.dart';
+import '../app_version.dart';
 import '../settings/settings_dialog.dart';
+import '../update/update_dialog.dart';
+import '../update/updater.dart' show checkForUpdate;
 import '../source/dart_youtube.dart';
 import '../source/ted_catalog.dart';
 import '../source/youtube_backend.dart';
@@ -254,6 +257,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         );
       } else {
         unawaited(_showRecentOnStart());
+        unawaited(_checkUpdateOnStart());
       }
     });
   }
@@ -635,6 +639,38 @@ class _PlayerScreenState extends State<PlayerScreen> {
       (await _recentStore()).add(source, title);
 
   /// 앱을 켜면 최근 재생목록을 바로 띄운다 (목록이 비어 있으면 띄우지 않는다)
+  /// 시작할 때 새 버전이 있으면 위쪽에 알린다 (12시간에 한 번 확인, 건너뛴 버전은 알리지 않음)
+  Future<void> _checkUpdateOnStart() async {
+    if (kDebugMode) return; // 개발 중에는 묻지 않는다
+    await Future<void>.delayed(const Duration(seconds: 3));
+    final r = await checkForUpdate();
+    if (r == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showMaterialBanner(
+      MaterialBanner(
+        content: Text('새 버전 ${r.version}이 있습니다 (지금 $appVersion)'),
+        actions: [
+          TextButton(
+            onPressed: messenger.hideCurrentMaterialBanner,
+            child: const Text('나중에'),
+          ),
+          FilledButton(
+            onPressed: () {
+              messenger.hideCurrentMaterialBanner();
+              unawaited(
+                showDialog<void>(
+                  context: context,
+                  builder: (_) => UpdateDialog(release: r),
+                ),
+              );
+            },
+            child: const Text('업데이트'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _showRecentOnStart() async {
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted || _opened) return;

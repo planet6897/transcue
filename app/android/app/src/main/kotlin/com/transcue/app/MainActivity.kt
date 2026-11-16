@@ -10,6 +10,8 @@ import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import androidx.core.content.FileProvider
+import java.io.File
 
 /// 동영상 읽기 권한 요청 (기기의 동영상을 실제 경로로 열기 위해).
 /// 외부 플러그인(permission_handler)은 빌드 도구 버전과 충돌해서 직접 구현.
@@ -36,6 +38,21 @@ class MainActivity : FlutterActivity() {
                         call.argument<Boolean>("english") ?: false,
                         result,
                     )
+                    else -> result.notImplemented()
+                }
+            }
+        // 자동 업데이트: 받은 APK의 설치 화면, 배포 페이지 열기
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "transcue/update")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "install" -> result.success(installApk(File(call.argument<String>("path")!!)))
+                    "openUrl" -> {
+                        startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(call.argument<String>("url")))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                        result.success(null)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -172,5 +189,26 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val REQUEST = 7001
+    }
+
+    /// 설치 화면을 열면 "started". 처음이라 '이 앱의 설치 허용'이 꺼져 있으면 그 설정 화면을 열고
+    /// "needPermission" (허용한 뒤 다시 누르게 한다).
+    private fun installApk(apk: File): String {
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName"),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            return "needPermission"
+        }
+        val uri = FileProvider.getUriForFile(this, "$packageName.updates", apk)
+        startActivity(
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        return "started"
     }
 }

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 받은 업데이트 APK (cacheDir/updates)를 설치 화면에 넘긴다 -->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>
