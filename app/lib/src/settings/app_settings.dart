@@ -128,7 +128,7 @@ class ParakeetModel {
 class AppSettings {
   AppSettings({
     this.claudeApiKey = '',
-    this.claudeModel = ClaudeModel.opus,
+    this.claudeModel = ClaudeModel.sonnet,
     this.provider = TranslateProvider.claude,
     this.openaiApiKey = '',
     this.openaiModel = OpenAiModel.sol,
@@ -211,7 +211,7 @@ class AppSettings {
         claudeApiKey: j['claudeApiKey'] as String? ?? '',
         claudeModel: ClaudeModel.values.firstWhere(
           (m) => m.name == j['claudeModel'],
-          orElse: () => ClaudeModel.opus,
+          orElse: () => ClaudeModel.sonnet,
         ),
         provider: TranslateProvider.values.firstWhere(
           (m) => m.name == j['provider'],

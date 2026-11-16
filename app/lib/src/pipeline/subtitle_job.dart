@@ -53,6 +53,42 @@ enum JobStage {
 }
 
 /// 저장된 결과를 어떻게 다시 만들지
+/// 저장된 자막·번역 (영상마다 파일 하나)
+Future<Directory> subtitleCacheDir() async =>
+    Directory('${(await AppSettings.supportDir()).path}/cache');
+
+/// 저장된 자막 개수와 크기(바이트)
+Future<({int files, int bytes})> subtitleCacheSize() async {
+  final dir = await subtitleCacheDir();
+  if (!await dir.exists()) return (files: 0, bytes: 0);
+  var files = 0, bytes = 0;
+  await for (final e in dir.list()) {
+    if (e is File && e.path.endsWith('.json')) {
+      files++;
+      bytes += await e.length();
+    }
+  }
+  return (files: files, bytes: bytes);
+}
+
+/// 저장된 자막·번역을 모두 지운다. 지운 개수.
+Future<int> clearSubtitleCache() async {
+  final dir = await subtitleCacheDir();
+  if (!await dir.exists()) return 0;
+  var n = 0;
+  await for (final e in dir.list()) {
+    if (e is File && e.path.endsWith('.json')) {
+      try {
+        await e.delete();
+        n++;
+      } on FileSystemException {
+        // 쓰는 중인 파일 등은 건너뛴다
+      }
+    }
+  }
+  return n;
+}
+
 enum JobRefresh {
   /// 저장된 결과를 그대로 사용
   none,
@@ -227,7 +263,7 @@ class SubtitleJob extends ChangeNotifier {
       }(),
       YoutubeSource(:final media) => 'yt:${media.id}',
     };
-    final dir = Directory('${(await AppSettings.supportDir()).path}/cache');
+    final dir = await subtitleCacheDir();
     await dir.create(recursive: true);
     return File('${dir.path}/${sha1.convert(utf8.encode(key))}.json');
   }
@@ -247,12 +283,16 @@ class SubtitleJob extends ChangeNotifier {
         'v': _cacheVersion,
         'lang': sourceLang,
         'from': originalFrom,
+        'koFrom': ?koreanFrom,
+        'aiLines': _aiLines,
         'osTried': _osTried,
         'sync': ?syncInfo,
         'release': ?_release,
         'speech': ?speechMatch,
         // 음성 인식 중간 저장: 다시 열면 남은 구간만 이어서 인식
         'complete': _sttDone || originalFrom != fromStt,
+        'spoken': ?_spokenLang,
+        'guess': ?_titleGuess,
         if (originalFrom == fromStt)
           'covered': [
             for (final (a, b) in _covered) [a, b],
@@ -293,6 +333,8 @@ class SubtitleJob extends ChangeNotifier {
       if (j['v'] != _cacheVersion) return false; // 이전 버전 결과는 다시 만든다
       sourceLang = j['lang'] as String?;
       originalFrom = '${j['from'] ?? '저장된 자막'}';
+      koreanFrom = j['koFrom'] as String?;
+      _aiLines = (j['aiLines'] as num?)?.toInt() ?? 0;
       debugPrint('[cache] saved from=$originalFrom lang=$sourceLang');
       _osTried = j['osTried'] == true;
       syncInfo = j['sync'] as String?;
@@ -314,9 +356,13 @@ class SubtitleJob extends ChangeNotifier {
       }
       // 예전에 음성과 다른 언어의 YouTube 자막(사람이 단 첫 자막 등)을 원어로 저장한 결과:
       // 지금 알아낸 음성 언어와 다르거나 음성 언어를 모르면 버리고 다시 받거나 음성 인식으로 만든다
+      // (음성 언어를 YouTube가 알려 주지 않아 음성 인식으로 알아내 고른 자막은 그 언어로 확인)
+      final spokenSaved = j['spoken'] as String? ?? j['guess'] as String?;
+      _titleGuess = j['spoken'] == null ? j['guess'] as String? : null;
+      _spokenLang ??= j['spoken'] as String?;
       if (source case YoutubeSource(:final media)
           when originalFrom.startsWith('YouTube') &&
-              (media.language == null || media.language != sourceLang)) {
+              (media.language ?? spokenSaved) != sourceLang) {
         debugPrint(
           'cache rejected: YouTube captions in $sourceLang, speech is ${media.language}',
         );
@@ -364,6 +410,13 @@ class SubtitleJob extends ChangeNotifier {
           await _loadExistingSubtitles()) {
         have = true;
       }
+      // 저장된 음성 인식 결과라도 그 언어의 YouTube 자막이 있으면 그것을 쓴다
+      if (cached &&
+          originalFrom == fromStt &&
+          refresh != JobRefresh.speech &&
+          await _switchToYoutubeCaptions(sourceLang)) {
+        have = true;
+      }
       // 받아 온 자막이 실제 음성과 같은 내용인지 확인 (번역 비용을 쓰기 전에)
       if (have && _needsSpeechCheck && !await _checkSpeech()) have = false;
       if (!have) {
@@ -399,14 +452,31 @@ class SubtitleJob extends ChangeNotifier {
     }
   }
 
+  /// 원문 자막의 출처 (음성 인식이면 어떤 엔진인지)
+  String get originalLabel => originalFrom == fromStt
+      ? settings.englishStt == EnglishStt.parakeet && sourceLang == 'en'
+            ? '음성 인식 (Parakeet)'
+            : '음성 인식 (whisper)'
+      : originalFrom;
+
+  /// 번역의 출처: 한국어 자막 + AI로 번역한 줄
+  String get translationLabel {
+    final ai = settings.provider.label;
+    return switch ((koreanFrom, _aiLines)) {
+      (null, _) => ai,
+      (final k?, 0) => k,
+      (final k?, final n) => '$k + $ai $n줄',
+    };
+  }
+
   String _summary() {
     final n = cues.length;
     final t = _translatedCount;
     final trans = sourceLang == 'ko'
         ? ''
-        : t == n
-        ? ' · 번역 완료'
-        : ' · 번역 $t/$n';
+        : t == 0
+        ? ''
+        : ' · 번역 $translationLabel${t == n ? '' : ' ($t/$n)'}';
     final sync = syncInfo == null ? '' : ' · $syncInfo';
     final speech = speechMatch == null
         ? ''
@@ -416,7 +486,7 @@ class SubtitleJob extends ChangeNotifier {
     final w = settings.showVocab && sourceLang != 'ko'
         ? ' · 단어 ${cues.where((c) => c.words != null).length}/$n'
         : '';
-    return '자막 $n줄 ($originalFrom${_fromCache ? ' · 저장됨' : ''})$trans$w$sync$speech';
+    return '자막 $n줄 · 원문 $originalLabel${_fromCache ? ' (저장됨)' : ''}$trans$w$sync$speech';
   }
 
   /// 내장 자막 또는 YouTube 자막. 찾으면 true.
@@ -431,6 +501,7 @@ class SubtitleJob extends ChangeNotifier {
             final ko = info.koreanTrack;
             if (ko != null) {
               c = mergeTranslation(c, await extractEmbeddedSubtitle(path, ko));
+              koreanFrom = '내장 한국어 자막';
             }
             sourceLang = orig.language;
             originalFrom = '내장 자막';
@@ -438,30 +509,247 @@ class SubtitleJob extends ChangeNotifier {
             return true;
           }
         }
-        return _loadOnlineSubtitles(path, info);
+        final found = await _loadOnlineSubtitles(path, info);
+        // 원어 자막은 없고 내장 한국어 자막만 있으면 음성 인식 원문에 붙인다 (AI 번역 대신)
+        final embeddedKo = info.koreanTrack;
+        if (!found &&
+            _onlineKorean == null &&
+            embeddedKo != null &&
+            osLang(info.audioLanguage) != 'ko') {
+          final k = await extractEmbeddedSubtitle(path, embeddedKo);
+          if (k.isNotEmpty) {
+            debugPrint('[captions] embedded Korean only: ${k.length} lines');
+            _onlineKorean = k;
+            koreanFrom = '내장 한국어 자막';
+            _koreanTimed = true; // 같은 파일에 든 자막이라 시간이 맞는다
+          }
+        }
+        return found;
 
       case YoutubeSource(:final media, :final ytDlp):
         final orig = media.original;
-        if (orig == null) return false;
+        if (orig == null) {
+          // 음성 언어를 모르면 제목 글자로 짐작해 그 언어 자막을 바로 보여 주고,
+          // 시작 싱크에서 음성 인식으로 언어를 확인한다 (음성 인식 모델을 받는 동안 자막이 없지 않게)
+          if (await _showGuessedCaptions(media, ytDlp)) return true;
+          // 원어 자막은 없어도 한국어 자막이 있으면 음성 인식 원문에 붙인다
+          final ko = media.korean;
+          if (ko != null) unawaited(_fetchKoreanForStt(media, ytDlp, ko));
+          return false;
+        }
         var c = parseWebVtt(await ytDlp.fetchCaption(media, orig));
         if (c.isEmpty) return false;
         sourceLang = media.language ?? orig.lang.split('-').first;
         originalFrom = orig.auto ? 'YouTube 자동 자막' : 'YouTube 자막';
         _setCues(c);
         final ko = media.korean;
-        // YouTube 자동 번역은 429가 잦아 실패해도 AI 번역으로 넘어간다
-        if (ko != null) {
-          try {
-            c = mergeTranslation(
-              c,
-              parseWebVtt(await ytDlp.fetchCaption(media, ko)),
-            );
-            _setCues(c);
-          } on Exception catch (e) {
-            debugPrint('YouTube Korean captions failed: $e');
-          }
-        }
+        // 한국어 자막은 뒤에서 받는다. 받는 동안 원문을 먼저 보여 주고 AI 번역도 시작한다.
+        // (yt-dlp는 한 번에 5~10초, 429면 다시 시도까지 30초 넘게 걸려 그동안 번역이 멈춰 있었다)
+        // 받으면 그 번역으로 바꾸고, 그 뒤로는 AI 번역이 필요 없다.
+        if (ko != null) unawaited(_fetchYoutubeKorean(media, ytDlp, ko));
         return true;
+    }
+  }
+
+  bool _koreanForSttTried = false;
+
+  /// 제목으로 짐작한 언어의 자막을 보여 주는 중 (음성으로 아직 확인 안 함)
+  String? _titleGuess;
+
+  Future<bool> _showGuessedCaptions(
+    YoutubeMedia media,
+    YoutubeBackend ytDlp,
+  ) async {
+    final guess = guessLanguageFromTitle(media.title);
+    if (guess == null) return false;
+    final track = captionForLanguage(media.captionTracks, guess);
+    if (track == null) return false;
+    try {
+      final c = parseWebVtt(await ytDlp.fetchCaption(media, track));
+      if (c.isEmpty || _disposed) return false;
+      debugPrint(
+        '[captions] title guess $guess → YouTube ${track.lang} (${c.length} lines)',
+      );
+      _titleGuess = guess;
+      sourceLang = guess;
+      originalFrom = track.auto ? 'YouTube 자동 자막' : 'YouTube 자막';
+      _setCues(c);
+      final ko =
+          media.korean ??
+          captionForLanguage(
+            media.captionTracks.where((t) => !t.auto).toList(),
+            'ko',
+          );
+      if (guess != 'ko' && ko != null) {
+        unawaited(_fetchYoutubeKorean(media, ytDlp, ko));
+      }
+      return true;
+    } on Exception catch (e) {
+      debugPrint('[captions] title guess $guess failed: $e');
+      return false;
+    }
+  }
+
+  /// 시작 싱크에서 알아낸 음성 언어로 제목 짐작을 확인한다
+  Future<void> _confirmTitleGuess(String spoken) async {
+    final guess = _titleGuess;
+    if (guess == null) return;
+    _titleGuess = null;
+    final lang = spoken.split('-').first;
+    _spokenLang = lang;
+    if (lang == guess) {
+      debugPrint('[captions] title guess $guess confirmed by speech');
+      await _saveCache();
+      return;
+    }
+    // 짐작이 틀렸다: 음성 언어의 자막으로 바꾸고, 없으면 음성 인식을 권한다
+    debugPrint('[captions] title guess $guess wrong: speech is $lang');
+    _onlineKorean = null;
+    koreanFrom = null;
+    if (await _switchToYoutubeCaptions(lang)) return;
+    notice = '자막 언어가 음성과 다릅니다. 🎤 자막 자동 생성으로 음성 인식 자막을 만드세요';
+    if (!_disposed) notifyListeners();
+  }
+
+  /// 음성 언어의 자막은 없지만 사람이 만든 한국어 자막이 있으면 음성 인식 원문에 붙인다
+  void _koreanForSttOnce(String? lang) {
+    if (_koreanForSttTried || lang == null || _onlineKorean != null) return;
+    if (source case YoutubeSource(
+      :final media,
+      :final ytDlp,
+    ) when media.original == null && media.korean == null) {
+      if (lang.split('-').first == 'ko') return;
+      _koreanForSttTried = true;
+      final ko = captionForLanguage(
+        media.captionTracks.where((t) => !t.auto).toList(),
+        'ko',
+      );
+      if (ko != null) unawaited(_fetchKoreanForStt(media, ytDlp, ko));
+    }
+  }
+
+  /// 한 번만 시도한다 (받기에 실패하면 음성 인식을 계속한다)
+  bool _captionSwitchTried = false;
+
+  /// 원어 자막을 못 고른 YouTube 영상에서 음성 언어 [lang]의 자막 트랙
+  CaptionTrack? _youtubeCaptionFor(String? lang) {
+    if (_captionSwitchTried || lang == null) return null;
+    if (source case YoutubeSource(:final media) when media.original == null) {
+      return captionForLanguage(media.captionTracks, lang.split('-').first);
+    }
+    return null;
+  }
+
+  /// YouTube에 음성 언어의 자막이 있으면 음성 인식 대신 그것을 보여 준다. 바꿨으면 true.
+  /// (음성 언어를 몰라 원어 자막을 못 고른 영상: 자막이 여러 언어로 있는 TED 등)
+  Future<bool> _switchToYoutubeCaptions(String? lang) async {
+    final track = _youtubeCaptionFor(lang);
+    if (track == null) {
+      _koreanForSttOnce(lang);
+      return false;
+    }
+    _captionSwitchTried = true;
+    final (media, ytDlp) = switch (source) {
+      YoutubeSource(:final media, :final ytDlp) => (media, ytDlp),
+      _ => throw StateError('not youtube'),
+    };
+    try {
+      final c = parseWebVtt(await ytDlp.fetchCaption(media, track));
+      if (c.isEmpty || _disposed) return false;
+      debugPrint(
+        '[captions] spoken $lang → YouTube ${track.lang} (${c.length} lines)',
+      );
+      sourceLang = lang!.split('-').first;
+      originalFrom = track.auto ? 'YouTube 자동 자막' : 'YouTube 자막';
+      _fromCache = false;
+      _covered.clear();
+      // 음성 인식에 붙이려고 받아 둔 한국어 자막이 있으면 그대로 쓰고, 없으면 받는다
+      final known = _onlineKorean;
+      _setCues(known == null ? c : mergeTranslation(c, known));
+      final ko =
+          media.korean ??
+          captionForLanguage(
+            media.captionTracks.where((t) => !t.auto).toList(),
+            'ko',
+          );
+      if (known == null && sourceLang != 'ko' && ko != null) {
+        unawaited(_fetchYoutubeKorean(media, ytDlp, ko));
+      }
+      await _saveCache();
+      return true;
+    } on Exception catch (e) {
+      debugPrint('[captions] YouTube ${track.lang} failed: $e');
+      return false;
+    }
+  }
+
+  static String _youtubeKoreanLabel(CaptionTrack ko) =>
+      ko.auto ? 'YouTube 자동 번역' : 'YouTube 한국어 자막';
+
+  /// 한국어 자막의 출처 (예: 'YouTube 한국어 자막'). 없으면 null (AI 번역만).
+  String? koreanFrom;
+
+  /// AI로 번역한 줄 수
+  int _aiLines = 0;
+
+  /// 받는 중인 한국어 자막 수 (받는 동안은 'API 키를 넣으라'는 안내를 미룬다)
+  int _koreanPending = 0;
+
+  /// [_onlineKorean]의 시간이 이 영상과 맞는지 (내장·YouTube 한국어 자막).
+  /// 인터넷(OpenSubtitles) 한국어 자막은 다른 판본일 수 있어 음성 인식이 끝난 뒤 싱크를 맞추고 붙인다.
+  bool _koreanTimed = false;
+
+  /// 원어 자막 없이 음성 인식할 YouTube 영상의 한국어 자막을 받아 둔다.
+  /// 이미 인식된 줄에는 바로 붙이고, 앞으로 인식되는 줄에는 [_insertCue]가 붙인다.
+  Future<void> _fetchKoreanForStt(
+    YoutubeMedia media,
+    YoutubeBackend ytDlp,
+    CaptionTrack ko,
+  ) async {
+    _koreanPending++;
+    try {
+      final k = parseWebVtt(await ytDlp.fetchCaption(media, ko));
+      if (_disposed || k.isEmpty || originalFrom != fromStt) return;
+      debugPrint('[captions] Korean for speech recognition: ${k.length} lines');
+      _onlineKorean = k;
+      _koreanTimed = true;
+      koreanFrom = _youtubeKoreanLabel(ko);
+      _setCues(mergeTranslation(cues, k));
+      await _saveCache();
+    } on Exception catch (e) {
+      debugPrint('YouTube Korean captions failed: $e');
+    } finally {
+      // 다 받았거나 실패했으면 남은 줄의 번역(또는 API 키 안내)을 이어서 한다
+      _koreanPending--;
+      if (!_disposed) _kickTranslation();
+    }
+  }
+
+  Future<void> _fetchYoutubeKorean(
+    YoutubeMedia media,
+    YoutubeBackend ytDlp,
+    CaptionTrack ko,
+  ) async {
+    final watch = Stopwatch()..start();
+    _koreanPending++;
+    try {
+      final k = parseWebVtt(await ytDlp.fetchCaption(media, ko));
+      if (_disposed || k.isEmpty) return;
+      debugPrint(
+        '[captions] Korean ${k.length} lines in ${watch.elapsedMilliseconds}ms',
+      );
+      koreanFrom = _youtubeKoreanLabel(ko);
+      _setCues(mergeTranslation(cues, k));
+      await _saveCache();
+    } on Exception catch (e) {
+      // YouTube 자동 번역은 429가 잦다. 실패하면 AI 번역을 그대로 쓴다
+      debugPrint(
+        'YouTube Korean captions failed (${watch.elapsedMilliseconds}ms): $e',
+      );
+    } finally {
+      // 다 받았거나 실패했으면 남은 줄의 번역(또는 API 키 안내)을 이어서 한다
+      _koreanPending--;
+      if (!_disposed) _kickTranslation();
     }
   }
 
@@ -513,6 +801,7 @@ class SubtitleJob extends ChangeNotifier {
     }
     _onlineOriginal = false;
     _onlineKorean = null;
+    koreanFrom = null;
     _fromCache = false;
     _complete = false;
     _covered.clear();
@@ -580,6 +869,7 @@ class SubtitleJob extends ChangeNotifier {
     notice =
         '인터넷 한국어 자막이 음성과 맞지 않아(${(r * 100).round()}%) ${settings.provider.label}로 번역합니다';
     _onlineKorean = null;
+    koreanFrom = null;
     _setCues([for (final c in cues) c.withTranslation(null)]);
     unawaited(_saveCache());
   }
@@ -668,8 +958,14 @@ class SubtitleJob extends ChangeNotifier {
   /// YouTube에 올라온 자막은 영상과 다른 판본 기준일 수 있다
   /// (실사례: TED 강연 자막이 인트로 없는 판본 기준이라 처음부터 끝까지 18.6초 빠름).
   /// 음성 인식 자막은 같은 소리에서 시간을 얻었으므로 확인하지 않는다.
+  ///
+  /// 로컬 파일: 내장 자막은 다른 판본 기준일 수 있고, 인터넷 자막의 전체 싱크([_autoSync])는
+  /// ffmpeg가 있는 데스크톱에서만 되므로 그 밖의 경우 이 방법으로 맞춘다.
   bool get _needsStartSync =>
-      source is YoutubeSource &&
+      switch (source) {
+        YoutubeSource() => true,
+        LocalFileSource() => !_needsSync || !hasDesktopTools,
+      } &&
       canTranscribe &&
       originalFrom != fromStt &&
       syncInfo == null &&
@@ -679,7 +975,6 @@ class SubtitleJob extends ChangeNotifier {
   /// 재생 위치부터 1분(Android 30초)을 받아 적어 자막과 같은 말이 나오는 시각을 비교하고,
   /// 자막 전체가 밀려 있으면 그만큼 옮긴다. 실패해도 자막은 그대로 쓴다.
   Future<void> _startSync() async {
-    final media = (source as YoutubeSource).media;
     final plan = startSyncPlan(android: Platform.isAndroid, tv: tvDevice);
     // Android는 싱크 확인만 하려고 큰 모델을 받지 않는다. 받아 둔 뒤에 열 때 확인한다
     final model = Platform.isAndroid
@@ -692,25 +987,45 @@ class SubtitleJob extends ChangeNotifier {
     final tmp = await Directory.systemTemp.createTemp('transcue_start_');
     try {
       final vad = await ensureVadModel();
-      final total = media.duration;
+      final (input, headers, total) = switch (source) {
+        YoutubeSource(:final media) => (
+          media.audioUrl ?? media.videoUrl,
+          media.httpHeaders,
+          media.duration,
+        ),
+        LocalFileSource(:final path) => (
+          path,
+          const <String, String>{},
+          (await _probe(path)).duration,
+        ),
+      };
       TextOffset? found;
+      String? detected;
       var from = playhead();
       for (var i = 0; i < plan.tries && found == null; i++) {
         if (_disposed) return;
         if (total != null && total > Duration.zero && from >= total) break;
         final spoken = <BilingualCue>[];
         await for (final ev in transcribeRange(
-          input: media.audioUrl ?? media.videoUrl,
-          httpHeaders: media.httpHeaders,
+          input: input,
+          httpHeaders: headers,
           start: from,
           length: plan.window,
           model: model,
           vadModel: vad,
-          language: sourceLang ?? 'auto',
+          // 제목으로 짐작한 언어면 음성 언어를 확인하려고 자동 감지
+          language: _titleGuess != null ? 'auto' : sourceLang ?? 'auto',
           tmp: tmp,
           threads: plan.threads,
         )) {
           if (ev is SttCue) spoken.add(ev.cue);
+          if (ev is SttLanguage) detected ??= ev.code;
+        }
+        if (detected != null && _titleGuess != null) {
+          final guess = _titleGuess;
+          await _confirmTitleGuess(detected);
+          // 짐작이 틀려 자막이 바뀌었으면 이 측정은 의미가 없다
+          if (detected.split('-').first != guess) return;
         }
         found = estimateTextOffset(shiftCues(spoken, from), cues);
         debugPrint(
@@ -870,6 +1185,7 @@ class SubtitleJob extends ChangeNotifier {
       }
       if (origHit == null) {
         _onlineKorean = koCues;
+        if (koCues != null) koreanFrom = 'OpenSubtitles 한국어 자막';
         return false;
       }
       _set(JobStage.preparing, '자막 내려받는 중 (OpenSubtitles)…');
@@ -879,16 +1195,19 @@ class SubtitleJob extends ChangeNotifier {
         // 다른 작품/편집본 자막: 싱크로 맞출 수 없으니 음성 인식을 쓴다
         notice = '인터넷 자막이 영상 길이와 맞지 않아 음성 인식을 사용합니다';
         _onlineKorean = koCues;
+        if (koCues != null) koreanFrom = 'OpenSubtitles 한국어 자막';
         if (!_disposed) notifyListeners();
         return false;
       }
       // 실제 음성과 같은 내용인지
       if (!await _speechMatches(c, lang: lang.split('-').first)) {
-        _onlineKorean = null; // 같은 검색에서 나온 한국어 자막도 믿을 수 없다
+        _onlineKorean = null;
+        koreanFrom = null; // 같은 검색에서 나온 한국어 자막도 믿을 수 없다
         return false;
       }
       _onlineOriginal = true;
       _onlineKorean = koCues;
+      if (koCues != null) koreanFrom = 'OpenSubtitles 한국어 자막';
       if (koCues != null) {
         c = mergeTranslation(c, koCues);
       }
@@ -956,7 +1275,12 @@ class SubtitleJob extends ChangeNotifier {
   }
 
   /// 재생 위치에 맞춰 큐를 시간순으로 끼워 넣는다
-  void _insertCue(BilingualCue c) {
+  void _insertCue(BilingualCue cue) {
+    // 시간이 맞는 한국어 자막이 있으면 인식되는 줄마다 바로 붙인다 (AI 번역을 기다리지 않게)
+    final ko = _onlineKorean;
+    final c = ko != null && _koreanTimed && cue.translation == null
+        ? mergeTranslation([cue], ko).first
+        : cue;
     var lo = 0, hi = cues.length;
     while (lo < hi) {
       final mid = (lo + hi) >> 1;
@@ -1019,7 +1343,7 @@ class SubtitleJob extends ChangeNotifier {
         ? ''
         : ' · $active 인식 중 ${_chunkWatch.elapsed.inSeconds}초';
     final trans = settings.hasTranslateKey && sourceLang != 'ko'
-        ? ' · 번역 $t줄'
+        ? ' · 번역 $t줄 ($translationLabel)'
         : '';
     final dl = _parakeetDownload;
     final parakeet = dl == null
@@ -1097,6 +1421,11 @@ class SubtitleJob extends ChangeNotifier {
         _coveredMs / total,
       );
       while (!_disposed) {
+        // 음성 인식으로 언어를 알았고 그 언어의 YouTube 자막이 있으면 그것으로 바꾸고 끝낸다
+        if (refresh != JobRefresh.speech &&
+            await _switchToYoutubeCaptions(_spokenLang)) {
+          return;
+        }
         // 재생 위치(2초 앞)부터 비어 있는 곳 → 없으면 처음부터 비어 있는 곳
         // 인식이 느린 기기는 조각 하나에 걸리는 시간만큼 앞에서 시작한다
         final start =
@@ -1208,6 +1537,12 @@ class SubtitleJob extends ChangeNotifier {
                     debugPrint('[stt] language $code');
                     _spokenLang = code;
                     sourceLang = mergeSpokenLang(sourceLang, code);
+                    // 이 언어의 YouTube 자막이 있으면 이 조각을 기다리지 않고 바로 바꾼다
+                    if (refresh != JobRefresh.speech &&
+                        _youtubeCaptionFor(code) != null &&
+                        !aborted.isCompleted) {
+                      aborted.complete();
+                    }
                 }
               },
               onError: (Object e, StackTrace st) {
@@ -1324,9 +1659,21 @@ class SubtitleJob extends ChangeNotifier {
   void _kickTranslation() {
     kickVocab(); // 학습 단어도 같은 시점에 (켜져 있을 때만)
     if (_dbg('DUALCUE_NO_TRANSLATE')) return;
-    if (!_needsTranslation) return;
+    if (!_needsTranslation) {
+      // 한국어 자막으로 모두 채워졌으면 API 키 안내는 필요 없다
+      if (notice?.contains('API 키를 등록') ?? false) {
+        notice = null;
+        if (!_disposed) notifyListeners();
+      }
+      return;
+    }
     if (!settings.hasTranslateKey) {
-      notice = '설정(⚙)에서 ${settings.provider.label} API 키를 등록하면 한국어 번역이 표시됩니다';
+      // 한국어 자막을 받는 중이면 그것으로 채워질 수 있으니 기다린다 (받으면 다시 불린다)
+      if (_koreanPending > 0) return;
+      final left = _pendingByPriority().length;
+      notice = koreanFrom == null
+          ? '설정(⚙)에서 ${settings.provider.label} API 키를 등록하면 한국어 번역이 표시됩니다'
+          : '$koreanFrom에 없는 $left줄은 설정(⚙)에서 ${settings.provider.label} API 키를 등록하면 번역됩니다';
       if (!_disposed) notifyListeners();
       return;
     }
@@ -1369,6 +1716,8 @@ class SubtitleJob extends ChangeNotifier {
   Future<void> retranslate() async {
     if (!canRetranslate) return;
     _fromCache = false;
+    koreanFrom = null; // 한국어 자막 대신 AI 번역으로 모두 바꾼다
+    _aiLines = 0;
     _setCues([
       for (final c in cues)
         c.translation == null
@@ -1421,6 +1770,7 @@ class SubtitleJob extends ChangeNotifier {
           for (var i = 0; i < batch.length; i++)
             if ((out[i] ?? '').isNotEmpty) _key(batch[i]): out[i]!,
         };
+        _aiLines += byKey.length;
         _attempted.addAll(
           batch.map(_key),
         ); // 누락된 줄은 다음 translateRemaining 때 재시도

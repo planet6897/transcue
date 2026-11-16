@@ -33,12 +33,12 @@ void main() {
     final s = AppSettings(claudeApiKey: 'claude-key');
     await open(tester, s);
     expect(find.text('Claude API 키'), findsOneWidget);
-    expect(find.textContaining('Claude Opus'), findsOneWidget);
+    expect(find.textContaining('Claude Sonnet'), findsOneWidget);
 
     await pick(tester, 'Claude', 'OpenAI');
     expect(find.text('OpenAI API 키'), findsOneWidget);
     expect(find.textContaining('GPT-6.1 Sol'), findsOneWidget);
-    expect(find.textContaining('Claude Opus'), findsNothing);
+    expect(find.textContaining('Claude Sonnet'), findsNothing);
     // Claude 키가 OpenAI 입력란에 보이면 안 된다
     expect(find.text('claude-key'), findsNothing);
 
@@ -54,7 +54,7 @@ void main() {
     expect(s.openaiModel, OpenAiModel.luna);
     // 다른 공급자의 키·모델은 그대로
     expect(s.claudeApiKey, 'claude-key');
-    expect(s.claudeModel, ClaudeModel.opus);
+    expect(s.claudeModel, ClaudeModel.sonnet);
     expect(s.hasTranslateKey, isTrue);
   });
 
