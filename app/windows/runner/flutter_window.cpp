@@ -5,6 +5,8 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "system_brightness.h"
+#include "system_volume.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -46,6 +48,74 @@ bool FlutterWindow::OnCreate() {
   });
   ::RegisterDragDrop(GetHandle(), drop_target_);
 
+  // 휠·키로 바꾸는 음량은 Windows 시스템 음량이다 (앱 음량과 따로 놀지 않게)
+  volume_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "transcue/volume",
+          &flutter::StandardMethodCodec::GetInstance());
+  volume_channel_->SetMethodCallHandler(
+      [](const flutter::MethodCall<flutter::EncodableValue>& call,
+         std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+             result) {
+        const std::string& m = call.method_name();
+        if (m == "get" || m == "set") {
+          std::optional<double> v;
+          if (m == "set") {
+            const auto* arg = std::get_if<double>(call.arguments());
+            v = arg != nullptr ? system_volume::Set(*arg) : std::nullopt;
+          } else {
+            v = system_volume::Get();
+          }
+          if (v) {
+            result->Success(flutter::EncodableValue(*v));
+          } else {
+            result->Error("volume", "system volume unavailable");
+          }
+        } else if (m == "getMute") {
+          std::optional<bool> mute = system_volume::GetMute();
+          if (mute) {
+            result->Success(flutter::EncodableValue(*mute));
+          } else {
+            result->Error("volume", "system volume unavailable");
+          }
+        } else if (m == "setMute") {
+          const auto* arg = std::get_if<bool>(call.arguments());
+          result->Success(flutter::EncodableValue(
+              arg != nullptr && system_volume::SetMute(*arg)));
+        } else {
+          result->NotImplemented();
+        }
+      });
+
+  // 휠로 바꾸는 밝기는 모니터의 실제 밝기다 (안 되면 앱이 영상 위를 어둡게 덮는다)
+  brightness_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "transcue/brightness",
+          &flutter::StandardMethodCodec::GetInstance());
+  brightness_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        const std::string& m = call.method_name();
+        if (m != "get" && m != "set") {
+          result->NotImplemented();
+          return;
+        }
+        std::optional<double> v;
+        if (m == "set") {
+          const auto* arg = std::get_if<double>(call.arguments());
+          v = arg != nullptr ? system_brightness::Set(GetHandle(), *arg)
+                             : std::nullopt;
+        } else {
+          v = system_brightness::Get(GetHandle());
+        }
+        if (v) {
+          result->Success(flutter::EncodableValue(*v));
+        } else {
+          result->Error("brightness", "this display does not support it");
+        }
+      });
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -66,6 +136,8 @@ void FlutterWindow::OnDestroy() {
     ::OleUninitialize();
   }
   drop_channel_ = nullptr;
+  volume_channel_ = nullptr;
+  brightness_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

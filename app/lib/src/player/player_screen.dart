@@ -41,6 +41,7 @@ import 'resume.dart';
 import 'sentence_loop.dart';
 import 'ted_browser.dart';
 import 'tv.dart';
+import 'system_volume.dart';
 import 'volume_gesture.dart';
 
 /// 자막 다시 만들기 메뉴
@@ -239,6 +240,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }),
     );
     _lifecycle; // 종료 요청 감시 시작
+    // Windows: 소리 크기는 시스템 음량으로만 조절한다 (앱 음량은 최대로 둔다)
+    if (usesSystemVolume) unawaited(_player.setVolume(100));
     if (kDebugMode) {
       final vol = double.tryParse(Platform.environment['DUALCUE_VOLUME'] ?? '');
       if (vol != null) unawaited(_player.setVolume(vol));
@@ -1609,6 +1612,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// 화면 밝기를 바꾸고 화면 가운데에 잠깐 보여 준다 (데스크톱)
   void _changeBrightness(double delta) {
+    // Windows: 모니터의 실제 밝기를 바꾼다 (모니터가 지원하지 않으면 아래처럼 영상을 덮어 어둡게)
+    if (usesSystemVolume && !SystemBrightness.instance.unsupported) {
+      unawaited(
+        SystemBrightness.instance.change(delta).then((v) {
+          if (v == null) return _changeBrightness(delta);
+          _showCenterHint(VolumeIndicator(value: v, brightness: true));
+        }),
+      );
+      return;
+    }
     final b = steppedBrightness(_screenBrightness.value, delta);
     _screenBrightness.value = b;
     _showCenterHint(VolumeIndicator(value: b, brightness: true));
@@ -1616,6 +1629,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// 음량을 바꾸고 화면 가운데에 잠깐 보여 준다
   void _changeVolume(double delta) {
+    if (usesSystemVolume) {
+      unawaited(
+        SystemVolume.instance
+            .change(delta)
+            .then((v) => _showCenterHint(VolumeIndicator(value: v))),
+      );
+      return;
+    }
     // 키를 누르고 있으면 플레이어 값이 갱신되기 전에 다음 입력이 오므로 직전 목표값을 기준으로 한다
     final now = DateTime.now();
     final recent = now.difference(_volumeChangedAt).inMilliseconds < 500;
@@ -1704,7 +1725,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
       const MaterialDesktopPlayOrPauseButton(),
       _desktopSeekButton(Icons.fast_forward, '다음 문장 (→)', 1),
       const MaterialDesktopSkipNextButton(),
-      const MaterialDesktopVolumeButton(),
+      if (usesSystemVolume)
+        const SystemVolumeButton()
+      else
+        const MaterialDesktopVolumeButton(),
       const MaterialDesktopPositionIndicator(),
       const Spacer(),
       _rateButton(desktop: true),
