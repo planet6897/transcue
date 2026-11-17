@@ -37,7 +37,9 @@ Future<File> downloadInRanges(
             // 조각 요청을 받지 않는 서버: 통째로 받는다
             if (pos != 0) throw HttpException('range ignored at $pos');
             await res.timeout(const Duration(seconds: 30)).pipe(sink);
-            debugPrint('[audio] downloaded whole ${watch.elapsedMilliseconds}ms');
+            debugPrint(
+              '[audio] downloaded whole ${watch.elapsedMilliseconds}ms',
+            );
             return out;
           }
           if (res.statusCode == 416) {
