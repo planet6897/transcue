@@ -24,6 +24,9 @@ import '../source/youtube_url.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
+import '../study/transcript_panel.dart';
+import '../study/wordbook.dart';
+import '../study/wordbook_dialog.dart';
 import '../pipeline/tools.dart';
 import 'dropped_link.dart';
 import 'file_browser.dart';
@@ -147,6 +150,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// 지금 재생 중인 로컬 파일 (YouTube면 null) — 연속 재생 기준
   String? _currentPath;
+
+  /// 지금 영상: 파일 경로 또는 YouTube 주소 (단어장에 장면을 기억하는 데 쓴다)
+  String? _source;
+
+  /// 다음에 여는 영상을 이 위치부터 재생 (단어장에서 장면 다시 보기). 이어 보기보다 우선.
+  Duration? _startAt;
+
+  /// 단어장
+  final _book = Wordbook(
+    AppSettings.supportDir().then((d) => File('${d.path}/wordbook.json')),
+  );
+
+  /// 자막 목록을 띄웠는지
+  final _transcriptShown = ValueNotifier<bool>(false);
   StreamSubscription<bool>? _completedSub;
 
   /// 이어 보기: 지금 영상의 키와 위치 기록
@@ -190,6 +207,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void initState() {
     super.initState();
     unawaited(refreshNaturalScroll());
+    unawaited(_book.load());
     final native = _player.platform;
     if (Platform.isAndroid && native is NativePlayer) {
       unawaited(
@@ -266,6 +284,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void dispose() {
     _dropChannel.setMethodCallHandler(null);
+    _book.dispose();
+    _transcriptShown.dispose();
     _completedSub?.cancel();
     _sentenceLoopSub?.cancel();
     _playingSub?.cancel();
@@ -422,6 +442,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _opened = false;
       _title = 'Transcue';
       _currentPath = null;
+      _source = null;
     });
   }
 
@@ -431,6 +452,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() {
       _title = path.split(Platform.pathSeparator).last;
       _currentPath = path;
+      _source = path;
       _opened = true;
     });
     if (kDebugMode) debugPrint('[open] $path');
@@ -548,6 +570,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       setState(() {
         _title = media.title;
         _currentPath = null;
+        _source = youtubeWatchUrl(id);
         _opened = true;
       });
       // 고화질은 영상/소리가 따로 온다. 소리는 영상이 실제로 로드된 뒤에 붙여야 한다
@@ -614,6 +637,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// 이전에 보던 위치가 있으면 거기로 옮긴다
   Future<void> _resumeAt(String key, Future<Duration?> loaded) async {
+    final start = _startAt;
+    if (start != null) {
+      _startAt = null;
+      if (await loaded != null) await _player.seek(start);
+      return;
+    }
     final at = await (await _positionStore()).get(key);
     if (at != null && await loaded != null) {
       await _player.seek(at);
@@ -1207,6 +1236,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     const SingleActivator(LogicalKeyboardKey.bracketRight): () =>
         _nudge(const Duration(milliseconds: 200)),
     const SingleActivator(LogicalKeyboardKey.keyV): _toggleVocab,
+    const SingleActivator(LogicalKeyboardKey.keyT): _toggleTranscript,
+    const SingleActivator(LogicalKeyboardKey.keyS): _saveCurrentSentence,
+    const SingleActivator(LogicalKeyboardKey.keyW): _openWordbook,
     const SingleActivator(LogicalKeyboardKey.keyR): _cyclePlayMode,
     const SingleActivator(LogicalKeyboardKey.keyL): _toggleSentenceLoop,
     // Shift+, / Shift+. 는 자판에 따라 논리 키가 달라 글자로 받는다
@@ -1231,6 +1263,150 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (v != null && v.isFullscreen()) v.exitFullscreen();
     },
   };
+
+  /// 자막과 자막 목록. 목록을 띄우면 자막은 목록을 피해 남은 영역 가운데에 둔다.
+  Widget _studyLayer() => LayoutBuilder(
+    builder: (context, box) => ValueListenableBuilder<bool>(
+      valueListenable: _transcriptShown,
+      builder: (context, shown, _) {
+        final width = (box.maxWidth * 0.36).clamp(260.0, 440.0);
+        // 화면이 너무 좁으면 목록이 영상을 덮으므로 자막은 제자리에 둔다
+        final side = shown && box.maxWidth - width >= 320;
+        return Stack(
+          children: [
+            Positioned.fill(
+              right: side ? width : 0,
+              child: LiveDualSubtitle(
+                position: _player.stream.position,
+                currentPosition: () => _player.state.position,
+                view: _view,
+                onTapCue: _copyCue,
+                saved: _book,
+                wordSaved: _book.hasWord,
+                onTapWord: _toggleWord,
+              ),
+            ),
+            if (shown)
+              Positioned(
+                top: 56,
+                right: 0,
+                bottom: 84,
+                width: width,
+                child: TranscriptPanel(
+                  view: _view,
+                  book: _book,
+                  position: _player.stream.position,
+                  currentPosition: () => _player.state.position,
+                  onSeek: _seekToCue,
+                  sentenceSaved: (c) =>
+                      _source != null && _book.hasSentence(_source!, c.start),
+                  onToggleSentence: _toggleSentence,
+                  onToggleWord: _toggleWord,
+                  onClose: _toggleTranscript,
+                ),
+              ),
+          ],
+        );
+      },
+    ),
+  );
+
+  void _toggleTranscript() {
+    if (!_opened && !_transcriptShown.value) return;
+    _transcriptShown.value = !_transcriptShown.value;
+  }
+
+  /// 문장의 처음(조금 앞)으로 간다. 문장 반복 중이면 그 문장을 반복한다.
+  void _seekToCue(BilingualCue c) {
+    var t = c.start - sentenceLeadIn;
+    if (t < Duration.zero) t = Duration.zero;
+    _sentenceLoop?.lockAt(_view.cues, t);
+    _player.seek(t);
+  }
+
+  Future<void> _toggleSentence(BilingualCue c) async {
+    final src = _source;
+    if (src == null) return;
+    final added = await _book.toggle(
+      StudyItem.ofSentence(c, source: src, title: _title),
+    );
+    _toast(added ? '문장을 단어장에 저장했습니다 (W: 단어장)' : '문장을 단어장에서 뺐습니다');
+  }
+
+  Future<void> _toggleWord(BilingualCue c, VocabItem w) async {
+    final src = _source;
+    if (src == null) return;
+    final added = await _book.toggle(
+      StudyItem.ofWord(w, c, source: src, title: _title),
+    );
+    _toast(added ? '★ ${w.lemma} 저장 (W: 단어장)' : '${w.lemma}: 단어장에서 뺐습니다');
+  }
+
+  /// S: 지금 문장(없으면 막 지나간 문장)을 단어장에 넣거나 뺀다
+  void _saveCurrentSentence() {
+    final cues = _view.cues;
+    final i = lastCueIndexBefore(cues, _player.state.position);
+    if (i < 0) {
+      _toast('저장할 문장이 없습니다');
+      return;
+    }
+    unawaited(_toggleSentence(cues[i]));
+  }
+
+  Future<void> _openWordbook() async {
+    unawaited(_book.load());
+    final picked = await showDialog<StudyItem>(
+      context: context,
+      builder: (_) => WordbookDialog(book: _book, onExport: _exportWordbook),
+    );
+    if (picked != null) await _replay(picked);
+  }
+
+  /// 단어장 항목의 장면으로 간다 (다른 영상이면 그 영상을 연다)
+  Future<void> _replay(StudyItem it) async {
+    final at = it.start - sentenceLeadIn;
+    final start = at < Duration.zero ? Duration.zero : at;
+    if (it.source == _source) {
+      _sentenceLoop?.lockAt(_view.cues, start);
+      await _player.seek(start);
+      await _player.play();
+      return;
+    }
+    final isYoutube = parseYoutubeId(it.source) != null;
+    if (!isYoutube && !await File(it.source).exists()) {
+      _toast('영상 파일이 없습니다: ${it.source}');
+      return;
+    }
+    _startAt = start;
+    await (isYoutube ? _openYoutubeUrl(it.source) : _openPath(it.source));
+    _startAt = null;
+  }
+
+  /// 단어장을 CSV로 저장 (데스크톱: 저장 위치를 묻는다, Android: 다운로드 폴더)
+  Future<void> _exportWordbook(List<StudyItem> items) async {
+    final csv = wordbookCsv(items);
+    final stamp = DateTime.now().toIso8601String().substring(0, 10);
+    final name = 'transcue-wordbook-$stamp.csv';
+    try {
+      String path;
+      if (Platform.isAndroid) {
+        path = '/storage/emulated/0/Download/$name';
+      } else {
+        final loc = await getSaveLocation(
+          suggestedName: name,
+          acceptedTypeGroups: const [
+            XTypeGroup(label: 'CSV', extensions: ['csv']),
+          ],
+        );
+        if (loc == null) return;
+        path = loc.path;
+      }
+      await File(path).writeAsString(csv);
+      _toast('${items.length}개를 내보냈습니다: $path');
+    } catch (e) {
+      _toast('내보내기 실패: $e');
+    }
+  }
 
   /// 학습 단어 켜기/끄기 (켜져 있을 때만 AI로 단어를 만든다)
   Future<void> _toggleVocab() async {
@@ -1824,6 +2000,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
         ),
         onPressed: _toggleVocab,
       ),
+      ValueListenableBuilder(
+        valueListenable: _transcriptShown,
+        builder: (context, shown, _) => IconButton(
+          tooltip: '자막 목록 (T)',
+          icon: Icon(
+            Icons.notes,
+            color: shown ? const Color(0xFF80DEEA) : null,
+          ),
+          onPressed: _opened ? _toggleTranscript : null,
+        ),
+      ),
+      IconButton(
+        tooltip: '단어장 (W)',
+        icon: const Icon(Icons.bookmarks_outlined),
+        onPressed: _openWordbook,
+      ),
       _menuDivider,
       IconButton(
         tooltip: '${_playMode.label}: ${_playMode.detail} (R)',
@@ -2076,12 +2268,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                     ),
                                   ),
                                 // 자막 상자가 클릭을 받도록 조작부 위에 둔다 (상자 밖은 통과)
-                                LiveDualSubtitle(
-                                  position: _player.stream.position,
-                                  currentPosition: () => _player.state.position,
-                                  view: _view,
-                                  onTapCue: _copyCue,
-                                ),
+                                Positioned.fill(child: _studyLayer()),
                                 Positioned.fill(
                                   child: Center(
                                     child: ValueListenableBuilder(

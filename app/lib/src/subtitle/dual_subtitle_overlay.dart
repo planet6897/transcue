@@ -76,7 +76,17 @@ class LiveDualSubtitle extends StatelessWidget {
     required this.currentPosition,
     required this.view,
     this.onTapCue,
+    this.saved,
+    this.wordSaved,
+    this.onTapWord,
   });
+
+  /// 단어장 (바뀌면 단어 옆 별 표시를 다시 그린다)
+  final Listenable? saved;
+  final bool Function(String lemma)? wordSaved;
+
+  /// 학습 단어를 눌렀을 때 (단어장에 넣기/빼기)
+  final void Function(BilingualCue, VocabItem)? onTapWord;
 
   /// 자막을 눌렀을 때. 자막 상자 밖의 클릭은 아래 조작부로 그대로 전달된다.
   final ValueChanged<BilingualCue>? onTapCue;
@@ -91,7 +101,7 @@ class LiveDualSubtitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: view,
+      listenable: Listenable.merge([view, saved]),
       builder: (context, _) => StreamBuilder<Duration>(
         stream: position,
         initialData: currentPosition(),
@@ -103,6 +113,8 @@ class LiveDualSubtitle extends StatelessWidget {
           showVocab: view.showVocab,
           onTapCue: onTapCue,
           copied: view.copied,
+          wordSaved: wordSaved,
+          onTapWord: onTapWord,
         ),
       ),
     );
@@ -120,9 +132,13 @@ class DualSubtitleOverlay extends StatelessWidget {
     this.showVocab = false,
     this.onTapCue,
     this.copied = false,
+    this.wordSaved,
+    this.onTapWord,
   });
 
   final ValueChanged<BilingualCue>? onTapCue;
+  final bool Function(String lemma)? wordSaved;
+  final void Function(BilingualCue, VocabItem)? onTapWord;
   final bool copied;
   final BilingualCue? cue;
   final bool showOriginal;
@@ -216,8 +232,10 @@ class DualSubtitleOverlay extends StatelessWidget {
           ),
         );
         if (words.isEmpty) return subtitle;
-        // 학습 단어: 화면 위쪽에 자막처럼
+        // 학습 단어: 화면 위쪽에 자막처럼. 누르면 단어장에 넣는다(별 표시)
+        final onWord = onTapWord;
         final vocab = IgnorePointer(
+          ignoring: onWord == null,
           child: Align(
             alignment: Alignment.topCenter,
             child: Padding(
@@ -240,28 +258,49 @@ class DualSubtitleOverlay extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     for (final w in words)
-                      Text.rich(
-                        TextSpan(
-                          children: [
-                            TextSpan(
-                              text: w.lemma,
-                              style: const TextStyle(
-                                color: _vocabColor,
-                                fontWeight: FontWeight.w700,
+                      _wordRow(
+                        c,
+                        w,
+                        size,
+                        Text.rich(
+                          TextSpan(
+                            children: [
+                              if (onWord != null)
+                                WidgetSpan(
+                                  alignment: PlaceholderAlignment.middle,
+                                  child: Padding(
+                                    padding: EdgeInsets.only(right: size * 0.2),
+                                    child: Icon(
+                                      (wordSaved?.call(w.lemma) ?? false)
+                                          ? Icons.star
+                                          : Icons.star_border,
+                                      size: size * 0.75,
+                                      color: (wordSaved?.call(w.lemma) ?? false)
+                                          ? _vocabColor
+                                          : Colors.white54,
+                                    ),
+                                  ),
+                                ),
+                              TextSpan(
+                                text: w.lemma,
+                                style: const TextStyle(
+                                  color: _vocabColor,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
-                            ),
-                            TextSpan(
-                              text: '  ${w.pos}  ',
-                              style: const TextStyle(color: Colors.white60),
-                            ),
-                            TextSpan(text: w.meaning),
-                          ],
-                        ),
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: size * 0.72,
-                          color: Colors.white,
-                          shadows: shadow,
+                              TextSpan(
+                                text: '  ${w.pos}  ',
+                                style: const TextStyle(color: Colors.white60),
+                              ),
+                              TextSpan(text: w.meaning),
+                            ],
+                          ),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: size * 0.72,
+                            color: Colors.white,
+                            shadows: shadow,
+                          ),
                         ),
                       ),
                   ],
@@ -272,6 +311,20 @@ class DualSubtitleOverlay extends StatelessWidget {
         );
         return Stack(children: [vocab, subtitle]);
       },
+    );
+  }
+
+  /// 학습 단어 한 줄. [onTapWord]가 있으면 눌러서 단어장에 넣거나 뺀다.
+  Widget _wordRow(BilingualCue c, VocabItem w, double size, Widget row) {
+    final onWord = onTapWord;
+    if (onWord == null) return row;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onWord(c, w),
+        child: row,
+      ),
     );
   }
 

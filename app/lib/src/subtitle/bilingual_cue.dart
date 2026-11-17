@@ -148,7 +148,8 @@ BilingualCue trimLingeringEnd(BilingualCue c) {
     }
   }
   final showMs = (speakMs * 1.4 + 800).round();
-  final maxEnd = c.start + Duration(milliseconds: showMs < 1500 ? 1500 : showMs);
+  final maxEnd =
+      c.start + Duration(milliseconds: showMs < 1500 ? 1500 : showMs);
   if (c.end <= maxEnd) return c;
   return BilingualCue(
     start: c.start,
@@ -160,9 +161,7 @@ BilingualCue trimLingeringEnd(BilingualCue c) {
   );
 }
 
-final _cjk = RegExp(
-  r'[぀-ヿ㐀-䶿一-鿿가-힣ｦ-ﾟ]',
-);
+final _cjk = RegExp(r'[぀-ヿ㐀-䶿一-鿿가-힣ｦ-ﾟ]');
 final _letterOrDigit = RegExp(r'[\p{L}\p{N}]', unicode: true);
 
 /// 재생 위치에 표시할 큐를 찾는다. (큐는 start 기준 정렬되어 있다고 가정)
@@ -174,7 +173,18 @@ BilingualCue? cueAt(
   Duration t, {
   Duration linger = Duration.zero,
 }) {
-  // start <= t 인 마지막 큐
+  final i = lastCueIndexBefore(cues, t);
+  if (i < 0) return null;
+  final c = cues[i];
+  var until = c.end + linger;
+  if (i + 1 < cues.length && cues[i + 1].start < until) {
+    until = cues[i + 1].start;
+  }
+  return t < until ? c : null;
+}
+
+/// start <= [t] 인 마지막 큐의 번호. 없으면 -1. (큐는 start 기준 정렬)
+int lastCueIndexBefore(List<BilingualCue> cues, Duration t) {
   var lo = 0, hi = cues.length;
   while (lo < hi) {
     final mid = (lo + hi) >> 1;
@@ -184,14 +194,7 @@ BilingualCue? cueAt(
       hi = mid;
     }
   }
-  final i = lo - 1;
-  if (i < 0) return null;
-  final c = cues[i];
-  var until = c.end + linger;
-  if (i + 1 < cues.length && cues[i + 1].start < until) {
-    until = cues[i + 1].start;
-  }
-  return t < until ? c : null;
+  return lo - 1;
 }
 
 /// 문장 단위로 이동할 때 문장 시작보다 이만큼 앞에서 재생한다 (첫소리를 잘 듣도록)
