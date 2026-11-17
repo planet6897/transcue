@@ -108,7 +108,7 @@ class DualSubtitleState extends ChangeNotifier {
 }
 
 /// 재생 위치를 따라 이중 자막을 그린다. 일반 화면/전체 화면 모두에서 동작.
-class LiveDualSubtitle extends StatelessWidget {
+class LiveDualSubtitle extends StatefulWidget {
   const LiveDualSubtitle({
     super.key,
     required this.position,
@@ -138,27 +138,75 @@ class LiveDualSubtitle extends StatelessWidget {
   final DualSubtitleState view;
 
   @override
+  State<LiveDualSubtitle> createState() => _LiveDualSubtitleState();
+}
+
+/// 재생 위치는 화면이 바뀔 때마다 들어오지만, 보여 줄 줄이 바뀔 때만 다시 그린다
+/// (매번 자막 전체를 다시 만들던 것을 줄인다).
+class _LiveDualSubtitleState extends State<LiveDualSubtitle> {
+  StreamSubscription<Duration>? _sub;
+  late Duration _pos = widget.currentPosition();
+  BilingualCue? _shown;
+
+  @override
+  void initState() {
+    super.initState();
+    _listen();
+  }
+
+  @override
+  void didUpdateWidget(LiveDualSubtitle old) {
+    super.didUpdateWidget(old);
+    if (old.position != widget.position ||
+        old.view != widget.view ||
+        old.saved != widget.saved) {
+      _unlisten(old);
+      _listen();
+    }
+  }
+
+  @override
+  void dispose() {
+    _unlisten(widget);
+    super.dispose();
+  }
+
+  void _listen() {
+    _sub = widget.position.listen(_onPosition);
+    widget.view.addListener(_onChanged);
+    widget.saved?.addListener(_onChanged);
+  }
+
+  void _unlisten(LiveDualSubtitle w) {
+    _sub?.cancel();
+    w.view.removeListener(_onChanged);
+    w.saved?.removeListener(_onChanged);
+  }
+
+  void _onPosition(Duration p) {
+    _pos = p;
+    if (!identical(cueAt(widget.view.cues, p), _shown)) setState(() {});
+  }
+
+  void _onChanged() => setState(() {});
+
+  @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: Listenable.merge([view, saved]),
-      builder: (context, _) => StreamBuilder<Duration>(
-        stream: position,
-        initialData: currentPosition(),
-        builder: (context, snap) => DualSubtitleOverlay(
-          // 자막 시간 그대로 표시 (끝난 뒤 더 보여 주면 영상보다 늦게 남아 있는 것처럼 보인다)
-          cue: cueAt(view.cues, snap.data ?? Duration.zero),
-          showOriginal: view.showOriginal,
-          showTranslation: view.showTranslation,
-          showVocab: view.showVocab,
-          showRuby: view.showRuby,
-          hideOriginal: (c) => view.hidesOriginal(c),
-          hideTranslation: (c) => view.hidesTranslation(c),
-          onTapCue: onTapCue,
-          copied: view.copied,
-          wordSaved: wordSaved,
-          onTapWord: onTapWord,
-        ),
-      ),
+    final view = widget.view;
+    // 자막 시간 그대로 표시 (끝난 뒤 더 보여 주면 영상보다 늦게 남아 있는 것처럼 보인다)
+    _shown = cueAt(view.cues, _pos);
+    return DualSubtitleOverlay(
+      cue: _shown,
+      showOriginal: view.showOriginal,
+      showTranslation: view.showTranslation,
+      showVocab: view.showVocab,
+      showRuby: view.showRuby,
+      hideOriginal: (c) => view.hidesOriginal(c),
+      hideTranslation: (c) => view.hidesTranslation(c),
+      onTapCue: widget.onTapCue,
+      copied: view.copied,
+      wordSaved: widget.wordSaved,
+      onTapWord: widget.onTapWord,
     );
   }
 }
