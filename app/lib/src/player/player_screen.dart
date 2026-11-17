@@ -85,7 +85,9 @@ class PlayerScreen extends StatefulWidget {
 }
 
 class _PlayerScreenState extends State<PlayerScreen> {
-  late final Player _player = Player(
+  late Player _player = _newPlayer();
+
+  Player _newPlayer() => Player(
     configuration: PlayerConfiguration(
       logLevel: kDebugMode ? MPVLogLevel.warn : MPVLogLevel.error,
       // 기본값(앞 32MB + 뒤 32MB 미리 받기)은 메모리 2GB인 TV 기기에 버겁다
@@ -129,8 +131,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// Android: 기본 출력(vo=gpu, mediacodec-copy)은 디코딩한 화면을 복사하느라 영상을 따라가지
   /// 못해 느리게 재생되고 소리·자막과 어긋났다 (Chromecast 1080p 0.6배속, 갤럭시 탭 S9
   /// 로컬 파일 0.93배속으로 1분에 3초씩 밀림) → 하드웨어 디코더가 화면에 바로 그리게 한다.
-  late final VideoController _controller = VideoController(
-    _player,
+  late VideoController _controller = _newController(_player);
+
+  VideoController _newController(Player player) => VideoController(
+    player,
     configuration: _tv || Platform.isAndroid
         ? const VideoControllerConfiguration(
             vo: 'mediacodec_embed',
@@ -139,6 +143,70 @@ class _PlayerScreenState extends State<PlayerScreen> {
         : const VideoControllerConfiguration(),
   );
 
+  /// Windows: mpv는 다른 영상을 열 때마다 영상 처리에 쓴 메모리를 5~10MB씩 돌려주지 않는다
+  /// (실측: 영상을 끄면(vid=no) 늘지 않고, 같은 파일을 다시 열어도 늘지 않는다.
+  /// 하드웨어 디코딩·미리 받기·렌더러 설정과는 무관). 몇 편마다 플레이어를 새로 만들어
+  /// 쌓인 것을 통째로 돌려준다.
+  static const _recycleEvery = 4;
+  int _opensOnPlayer = 0;
+  StreamSubscription<PlayerLog>? _logSub;
+
+  /// 플레이어를 새로 만들었을 때마다 붙이는 설정과 구독
+  void _attachPlayer() {
+    final native = _player.platform;
+    if (Platform.isAndroid && native is NativePlayer) {
+      unawaited(
+        native.setProperty('demuxer-max-back-bytes', '$_androidBackBuffer'),
+      );
+    }
+    // Windows: 소리 크기는 시스템 음량으로만 조절한다 (앱 음량은 최대로 둔다)
+    if (usesSystemVolume) unawaited(_player.setVolume(100));
+    if (kDebugMode) {
+      final vol = double.tryParse(Platform.environment['DUALCUE_VOLUME'] ?? '');
+      if (vol != null) unawaited(_player.setVolume(vol));
+      _logSub = _player.stream.log.listen(
+        (l) => debugPrint('[mpv] ${l.prefix}: ${l.text}'),
+      );
+    }
+    _completedSub = _player.stream.completed.listen((done) {
+      // 다른 영상을 여는 중(이전 영상을 멈춤)에는 끝난 것으로 보지 않는다
+      if (done && !_switching) _onCompleted();
+    });
+    _playingSub = _player.stream.playing.listen((p) {
+      if (kDebugMode) debugPrint('[playing] $p');
+      if (p) _pausedByCopy = false;
+      if (!p) unawaited(_rememberPosition());
+    });
+  }
+
+  /// 영상을 새로 열기 직전(보던 영상을 내린 뒤)에 부른다. [_recycleEvery]편마다
+  /// 플레이어와 화면을 새로 만들고 이전 것을 닫는다.
+  Future<void> _maybeRecyclePlayer() async {
+    _opensOnPlayer++;
+    if (!Platform.isWindows || _opensOnPlayer <= _recycleEvery) return;
+    _opensOnPlayer = 1;
+    // 전체 화면은 이전 화면(Video)에 묶여 있어 잠시 나왔다가 다시 들어간다
+    final full = _videoKey.currentState?.isFullscreen() ?? false;
+    if (full) await _videoKey.currentState?.exitFullscreen();
+    if (!mounted) return;
+    final old = _player;
+    await _logSub?.cancel();
+    await _completedSub?.cancel();
+    await _playingSub?.cancel();
+    setState(() {
+      _player = _newPlayer();
+      _controller = _newController(_player);
+      // 새 컨트롤러는 새 화면으로 그린다 (Video는 컨트롤러가 바뀌는 것을 따라가지 않는다)
+      _videoKey = GlobalKey<VideoState>();
+    });
+    _attachPlayer();
+    // 이전 화면이 내려간 뒤에 닫는다
+    await WidgetsBinding.instance.endOfFrame;
+    await old.dispose();
+    debugPrint('[player] recycled');
+    if (full && mounted) await _videoKey.currentState?.enterFullscreen();
+  }
+
   /// TV 감지가 끝났는지. 끝나기 전에는 영상([_controller])을 만들지 않는다.
   bool _deviceKnown = false;
 
@@ -146,7 +214,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late final YoutubeBackend _ytDlp =
       widget._ytDlp ?? (Platform.isAndroid ? DartYoutube() : YtDlp());
   final _view = DualSubtitleState();
-  final _videoKey = GlobalKey<VideoState>();
+  var _videoKey = GlobalKey<VideoState>();
 
   AppSettings _settings = AppSettings();
   SubtitleJob? _job;
@@ -236,12 +304,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     super.initState();
     unawaited(refreshNaturalScroll());
     unawaited(_book.load());
-    final native = _player.platform;
-    if (Platform.isAndroid && native is NativePlayer) {
-      unawaited(
-        native.setProperty('demuxer-max-back-bytes', '$_androidBackBuffer'),
-      );
-    }
+    _attachPlayer();
     _dropChannel.setMethodCallHandler((call) async {
       if (call.method != 'drop') return;
       final items = (call.arguments as List).cast<String>();
@@ -264,27 +327,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }),
     );
     _lifecycle; // 종료 요청 감시 시작
-    // Windows: 소리 크기는 시스템 음량으로만 조절한다 (앱 음량은 최대로 둔다)
-    if (usesSystemVolume) unawaited(_player.setVolume(100));
-    if (kDebugMode) {
-      final vol = double.tryParse(Platform.environment['DUALCUE_VOLUME'] ?? '');
-      if (vol != null) unawaited(_player.setVolume(vol));
-      _player.stream.log.listen(
-        (l) => debugPrint('[mpv] ${l.prefix}: ${l.text}'),
-      );
-    }
-    _completedSub = _player.stream.completed.listen((done) {
-      // 다른 영상을 여는 중(이전 영상을 멈춤)에는 끝난 것으로 보지 않는다
-      if (done && !_switching) _onCompleted();
-    });
     // 재생 중 5초마다, 그리고 일시정지할 때 위치를 기록
     _positionTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_player.state.playing) unawaited(_rememberPosition());
-    });
-    _playingSub = _player.stream.playing.listen((p) {
-      if (kDebugMode) debugPrint('[playing] $p');
-      if (p) _pausedByCopy = false;
-      if (!p) unawaited(_rememberPosition());
     });
     AppSettings.load().then((s) {
       setState(() => _settings = s);
@@ -321,6 +366,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _completedSub?.cancel();
     _sentenceLoopSub?.cancel();
     _playingSub?.cancel();
+    _logSub?.cancel();
     _positionTimer?.cancel();
     unawaited(_rememberPosition());
     _lifecycle.dispose();
@@ -476,6 +522,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _currentPath = null;
       _source = null;
     });
+    await _maybeRecyclePlayer();
   }
 
   Future<void> _openPath(String path) async {
