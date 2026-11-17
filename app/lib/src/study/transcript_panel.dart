@@ -74,6 +74,16 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
   }
 
   @override
+  void didUpdateWidget(TranscriptPanel old) {
+    super.didUpdateWidget(old);
+    // 플레이어를 새로 만들면 재생 위치 스트림도 바뀐다
+    if (old.position != widget.position) {
+      _sub?.cancel();
+      _sub = widget.position.listen(_update);
+    }
+  }
+
+  @override
   void dispose() {
     _sub?.cancel();
     _scroll.dispose();
