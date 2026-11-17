@@ -59,11 +59,11 @@ void main() {
       StudyItem.ofWord(_word, _cue, source: '/v.mp4', title: 'My, video'),
     ]);
     final lines = csv.split('\r\n');
-    expect(lines[0], '﻿단어,품사,뜻,문장,번역,영상,시간');
+    expect(lines[0], '﻿단어,품사,뜻,문장,번역,영상,시간,해설');
     expect(
       lines[1],
       'abduct,동,납치하다,"He was abducted, ""allegedly"".",'
-      '"그는 납치됐다, ""주장에 따르면"".","My, video",00:12',
+      '"그는 납치됐다, ""주장에 따르면"".","My, video",00:12,',
     );
   });
 

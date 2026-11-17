@@ -83,6 +83,17 @@ enum VocabLevel {
   final String description;
 }
 
+/// 듣기 연습: 자막의 일부를 가려 두고 들어 본 뒤 눌러서 확인한다
+enum PracticeMode {
+  off('보통', '원문과 번역을 모두 보여 줍니다'),
+  hideTranslation('번역 가리기', '원문만 보고 뜻을 떠올린 뒤 D 키(또는 자막 누르기)로 번역 보기'),
+  hideAll('원문·번역 가리기', '소리만 듣고 떠올린 뒤 D 키(또는 자막 누르기)로 확인');
+
+  const PracticeMode(this.label, this.detail);
+  final String label;
+  final String detail;
+}
+
 /// 로컬 음성 인식(whisper.cpp) 모델.
 enum WhisperModel {
   turbo(
@@ -140,6 +151,8 @@ class AppSettings {
     this.osUsername = '',
     this.osPassword = '',
     this.showVocab = false,
+    this.showRuby = false,
+    this.practice = PracticeMode.off,
     this.playbackRate = 1.0,
     this.vocabLevel = VocabLevel.intermediate,
     this.autoPlayNext = true,
@@ -154,6 +167,12 @@ class AppSettings {
 
   /// 학습 단어 표시 (켜져 있을 때만 단어를 만든다 — 번역 API 비용)
   bool showVocab;
+
+  /// 일본어 자막에 읽는 법(후리가나) 달기 (켜져 있을 때만 만든다 — 번역 API 비용)
+  bool showRuby;
+
+  /// 듣기 연습 (자막 가리기)
+  PracticeMode practice;
 
   /// 재생 속도 (1.0 = 보통). 다음 영상에도 그대로 쓴다
   double playbackRate;
@@ -243,6 +262,11 @@ class AppSettings {
         osUsername: j['osUsername'] as String? ?? '',
         osPassword: j['osPassword'] as String? ?? '',
         showVocab: j['showVocab'] == true,
+        showRuby: j['showRuby'] == true,
+        practice: PracticeMode.values.firstWhere(
+          (m) => m.name == j['practice'],
+          orElse: () => PracticeMode.off,
+        ),
         playbackRate: (j['playbackRate'] as num?)?.toDouble() ?? 1.0,
         vocabLevel: VocabLevel.values.firstWhere(
           (m) => m.name == j['vocabLevel'],
@@ -273,6 +297,8 @@ class AppSettings {
         'osUsername': osUsername.trim(),
         'osPassword': osPassword,
         'showVocab': showVocab,
+        'showRuby': showRuby,
+        'practice': practice.name,
         'playbackRate': playbackRate,
         'vocabLevel': vocabLevel.name,
         'autoPlayNext': autoPlayNext,

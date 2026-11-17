@@ -1657,7 +1657,8 @@ class SubtitleJob extends ChangeNotifier {
         if (ended) {
           // 소리가 없음. 영상 끝 근처(또는 길이를 모름)일 때만 끝까지 인식된 것으로 본다.
           // 중간이면 이 조각만 채운다 (소리가 짧게 읽혔을 뿐 뒤에는 아직 말이 있다)
-          final atEnd = duration == null ||
+          final atEnd =
+              duration == null ||
               duration <= Duration.zero ||
               readEnd >= total - _endSlackMs;
           _addCovered(start, atEnd ? total : readEnd);
@@ -1731,6 +1732,7 @@ class SubtitleJob extends ChangeNotifier {
   /// 번역 루프가 없으면 시작한다. 음성 인식 줄이 생기거나 재생 위치를 옮길 때 불린다.
   void _kickTranslation() {
     kickVocab(); // 학습 단어도 같은 시점에 (켜져 있을 때만)
+    kickRuby(); // 일본어 읽는 법도
     if (_dbg('DUALCUE_NO_TRANSLATE')) return;
     if (!_needsTranslation) {
       // 한국어 자막으로 모두 채워졌으면 API 키 안내는 필요 없다
@@ -1857,7 +1859,9 @@ class SubtitleJob extends ChangeNotifier {
         }
         await _saveCache();
       }
-    } on TranslateException catch (e) {
+    } catch (e) {
+      // 어떤 오류든 알린다 (안내 없이 멈추면 번역이 왜 안 되는지 알 수 없다)
+      debugPrint('[translate] stopped: $e');
       notice = '번역 중단: $e';
       if (!_disposed) notifyListeners();
     }
@@ -1924,8 +1928,74 @@ class SubtitleJob extends ChangeNotifier {
         ]);
         await _saveCache();
       }
-    } on TranslateException catch (e) {
+    } catch (e) {
+      // 어떤 오류든 알린다 (안내 없이 멈추면 번역이 왜 안 되는지 알 수 없다)
+      debugPrint('[translate] stopped: $e');
       notice = '학습 단어 생성 중단: $e';
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  // ---- 일본어 읽는 법 (켜져 있을 때만, 재생 위치 근처부터) ----
+
+  Future<void>? _rubyLoop;
+  final _rubyAttempted = <String>{};
+  static final _kanji = RegExp(r'[㐀-䶿一-鿿々〆ヶ]');
+
+  List<BilingualCue> _rubyPending() {
+    final ph = playhead().inMilliseconds - 5000;
+    final p = [
+      for (final c in cues)
+        if (c.ruby == null &&
+            _kanji.hasMatch(c.original) &&
+            !_rubyAttempted.contains(_key(c)))
+          c,
+    ];
+    return [
+      ...p.where((c) => c.end.inMilliseconds >= ph),
+      ...p.where((c) => c.end.inMilliseconds < ph),
+    ];
+  }
+
+  /// 읽는 법 만들기를 시작한다 (설정에서 켰을 때도 호출). 일본어 자막에만.
+  void kickRuby() {
+    if (!settings.showRuby || sourceLang != 'ja') return;
+    if (_dbg('DUALCUE_NO_TRANSLATE')) return;
+    if (_rubyLoop != null || _rubyPending().isEmpty) return;
+    if (!settings.hasTranslateKey) {
+      notice = '설정(⚙)에서 ${settings.provider.label} API 키를 등록하면 읽는 법이 표시됩니다';
+      if (!_disposed) notifyListeners();
+      return;
+    }
+    _rubyLoop = _rubyRun().whenComplete(() => _rubyLoop = null);
+  }
+
+  Future<void> _rubyRun() async {
+    final tr = createTranslator(settings);
+    try {
+      while (!_disposed && settings.showRuby) {
+        final pending = _rubyPending();
+        if (pending.isEmpty) return;
+        final near = (pending.first.start - playhead()).inSeconds.abs() < 30;
+        final batch = pending.take(near ? _nearBatchSize : _batchSize).toList();
+        final out = await tr.furigana({
+          for (var i = 0; i < batch.length; i++) i: batch[i].original,
+        });
+        final byKey = <String, String>{
+          for (var i = 0; i < batch.length; i++)
+            if (out[i] != null) _key(batch[i]): out[i]!,
+        };
+        _rubyAttempted.addAll(batch.map(_key));
+        _setCues([
+          for (final c in cues)
+            if (byKey[_key(c)] case final r?) c.withRuby(r) else c,
+        ]);
+        await _saveCache();
+      }
+    } catch (e) {
+      // 어떤 오류든 알린다 (안내 없이 멈추면 번역이 왜 안 되는지 알 수 없다)
+      debugPrint('[translate] stopped: $e');
+      notice = '읽는 법 생성 중단: $e';
       if (!_disposed) notifyListeners();
     }
   }

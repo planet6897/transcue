@@ -20,6 +20,7 @@ class StudyItem {
     required this.start,
     required this.end,
     required this.savedAt,
+    this.note,
   });
 
   /// 단어 [w]를 [cue] 문장과 함께
@@ -47,7 +48,9 @@ class StudyItem {
     BilingualCue cue, {
     required String source,
     required String title,
+    String? note,
   }) => StudyItem(
+    note: note,
     sentence: cue.original,
     translation: cue.translation,
     source: source,
@@ -74,6 +77,9 @@ class StudyItem {
   final Duration end;
   final DateTime savedAt;
 
+  /// 문장 해설 (AI) — 해설을 보고 저장했을 때
+  final String? note;
+
   bool get isWord => word != null;
 
   /// 같은 것인지 가리는 열쇠. 단어는 영상이 달라도 한 번만 모은다.
@@ -97,6 +103,7 @@ class StudyItem {
     's': start.inMilliseconds,
     'e': end.inMilliseconds,
     'at': savedAt.millisecondsSinceEpoch,
+    if (note != null) 'n': note,
   };
 
   factory StudyItem.fromJson(Map<String, dynamic> j) => StudyItem(
@@ -111,6 +118,7 @@ class StudyItem {
     start: Duration(milliseconds: (j['s'] as num).toInt()),
     end: Duration(milliseconds: (j['e'] as num).toInt()),
     savedAt: DateTime.fromMillisecondsSinceEpoch((j['at'] as num).toInt()),
+    note: j['n'] as String?,
   );
 }
 
@@ -161,6 +169,20 @@ class Wordbook extends ChangeNotifier {
   bool hasSentence(String source, Duration start) =>
       _keys.contains(StudyItem.keyOfSentence(source, start));
 
+  /// 넣는다. 이미 있으면 새 내용으로 바꾼다 (예: 해설을 붙여 다시 저장).
+  Future<void> put(StudyItem item) async {
+    await load();
+    final i = _items.indexWhere((e) => e.key == item.key);
+    if (i >= 0) {
+      _items[i] = item;
+    } else {
+      _keys.add(item.key);
+      _items.insert(0, item);
+    }
+    notifyListeners();
+    await _save();
+  }
+
   /// 없으면 넣고 있으면 뺀다. 넣었으면 true.
   Future<bool> toggle(StudyItem item) async {
     await load();
@@ -198,7 +220,7 @@ String wordbookCsv(List<StudyItem> items) {
     return h > 0 ? '$h:${two(m)}:${two(s)}' : '${two(m)}:${two(s)}';
   }
 
-  final b = StringBuffer('﻿단어,품사,뜻,문장,번역,영상,시간\r\n');
+  final b = StringBuffer('\uFEFF단어,품사,뜻,문장,번역,영상,시간,해설\r\n');
   for (final it in items) {
     b.write(
       [
@@ -209,6 +231,7 @@ String wordbookCsv(List<StudyItem> items) {
         cell(it.translation),
         cell(it.title),
         time(it.start),
+        cell(it.note),
       ].join(','),
     );
     b.write('\r\n');

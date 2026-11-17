@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../player/resume.dart' show formatPosition;
 import '../subtitle/bilingual_cue.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
+import '../subtitle/ruby_text.dart';
 import 'wordbook.dart';
 
 const _accent = Color(0xFF80DEEA);
@@ -24,8 +25,12 @@ class TranscriptPanel extends StatefulWidget {
     required this.sentenceSaved,
     required this.onToggleSentence,
     required this.onToggleWord,
+    required this.onExplain,
     required this.onClose,
   });
+
+  /// 문장 해설 (AI)
+  final ValueChanged<BilingualCue> onExplain;
 
   final DualSubtitleState view;
   final Wordbook book;
@@ -147,6 +152,14 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
                                   showOriginal: widget.view.showOriginal,
                                   showTranslation: widget.view.showTranslation,
                                   showVocab: widget.view.showVocab,
+                                  showRuby: widget.view.showRuby,
+                                  hideOriginal: widget.view.hidesOriginal(
+                                    cues[i],
+                                  ),
+                                  hideTranslation: widget.view.hidesTranslation(
+                                    cues[i],
+                                  ),
+                                  onExplain: () => widget.onExplain(cues[i]),
                                   saved: widget.sentenceSaved(cues[i]),
                                   wordSaved: widget.book.hasWord,
                                   onTap: () => widget.onSeek(cues[i]),
@@ -209,6 +222,10 @@ class _CueTile extends StatefulWidget {
     required this.showOriginal,
     required this.showTranslation,
     required this.showVocab,
+    required this.showRuby,
+    required this.hideOriginal,
+    required this.hideTranslation,
+    required this.onExplain,
     required this.saved,
     required this.wordSaved,
     required this.onTap,
@@ -222,6 +239,12 @@ class _CueTile extends StatefulWidget {
   final bool showOriginal;
   final bool showTranslation;
   final bool showVocab;
+  final bool showRuby;
+
+  /// 듣기 연습에서 가린 줄 (지나간 줄은 보여 준다)
+  final bool hideOriginal;
+  final bool hideTranslation;
+  final VoidCallback onExplain;
   final bool saved;
   final bool Function(String lemma) wordSaved;
   final VoidCallback onTap;
@@ -265,9 +288,19 @@ class _CueTileState extends State<_CueTile> {
   @override
   Widget build(BuildContext context) {
     final c = widget.cue;
-    final words = widget.showVocab
+    // 아직 듣지 않은 줄(지금 줄 포함)만 가린다
+    final ahead = widget.index >= widget.current.value;
+    final hideO = widget.hideOriginal && ahead;
+    final hideT = widget.hideTranslation && ahead;
+    final words = widget.showVocab && !hideO
         ? (c.words ?? const <VocabItem>[])
         : const <VocabItem>[];
+    final origStyle = TextStyle(
+      color: _active ? Colors.white : Colors.white70,
+      fontSize: 15,
+      height: 1.3,
+    );
+    final ruby = widget.showRuby ? c.ruby : null;
     return Container(
       color: _active ? Colors.white.withValues(alpha: 0.12) : null,
       child: InkWell(
@@ -295,7 +328,14 @@ class _CueTileState extends State<_CueTile> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (widget.showOriginal)
+                    if (widget.showOriginal && hideO)
+                      const HiddenLine(fontSize: 13, hint: false)
+                    else if (widget.showOriginal && ruby != null)
+                      Text.rich(
+                        TextSpan(children: rubySpans(ruby, origStyle)),
+                        style: origStyle,
+                      )
+                    else if (widget.showOriginal)
                       Text.rich(
                         TextSpan(
                           children: [
@@ -315,13 +355,13 @@ class _CueTileState extends State<_CueTile> {
                               ),
                           ],
                         ),
-                        style: TextStyle(
-                          color: _active ? Colors.white : Colors.white70,
-                          fontSize: 15,
-                          height: 1.3,
-                        ),
+                        style: origStyle,
                       ),
-                    if (widget.showTranslation && c.translation != null)
+                    if (widget.showTranslation &&
+                        c.translation != null &&
+                        hideT)
+                      const HiddenLine(fontSize: 12, hint: false)
+                    else if (widget.showTranslation && c.translation != null)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
                         child: Text(
@@ -338,6 +378,16 @@ class _CueTileState extends State<_CueTile> {
                     for (final w in words) _wordRow(w),
                   ],
                 ),
+              ),
+              IconButton(
+                tooltip: '문장 해설 (E)',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(
+                  Icons.lightbulb_outline,
+                  size: 20,
+                  color: Colors.white38,
+                ),
+                onPressed: widget.onExplain,
               ),
               IconButton(
                 tooltip: widget.saved ? '단어장에서 빼기' : '문장을 단어장에 저장 (S)',

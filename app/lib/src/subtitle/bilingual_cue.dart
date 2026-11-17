@@ -56,6 +56,7 @@ class BilingualCue {
     this.translation,
     this.words,
     this.provisional = false,
+    this.ruby,
   });
 
   final Duration start;
@@ -69,6 +70,9 @@ class BilingualCue {
   /// AI로 다시 번역하는 중인 줄. 새 번역이 올 때까지 기존 번역을 보여 준다.
   final bool provisional;
 
+  /// 일본어 읽는 법 ([rubyMarkup] 형식). null = 아직 안 만듦
+  final String? ruby;
+
   bool contains(Duration t) => t >= start && t < end;
 
   BilingualCue withTranslation(String? t, {bool provisional = false}) =>
@@ -79,6 +83,7 @@ class BilingualCue {
         translation: t,
         words: words,
         provisional: provisional,
+        ruby: ruby,
       );
 
   BilingualCue withWords(List<VocabItem>? w) => BilingualCue(
@@ -88,6 +93,7 @@ class BilingualCue {
     translation: translation,
     words: w,
     provisional: provisional,
+    ruby: ruby,
   );
 
   BilingualCue withTimes(Duration s, Duration e) => BilingualCue(
@@ -97,6 +103,17 @@ class BilingualCue {
     translation: translation,
     words: words,
     provisional: provisional,
+    ruby: ruby,
+  );
+
+  BilingualCue withRuby(String? r) => BilingualCue(
+    start: start,
+    end: end,
+    original: original,
+    translation: translation,
+    words: words,
+    provisional: provisional,
+    ruby: r,
   );
 
   Map<String, Object?> toJson() => {
@@ -106,6 +123,7 @@ class BilingualCue {
     if (translation != null) 't': translation,
     if (words != null) 'w': [for (final w in words!) w.toJson()],
     if (provisional) 'p': 1,
+    if (ruby != null) 'r': ruby,
   };
 
   factory BilingualCue.fromJson(Map<String, dynamic> j) => BilingualCue(
@@ -117,7 +135,33 @@ class BilingualCue {
         ?.map((e) => VocabItem.fromJson(e as List<dynamic>))
         .toList(),
     provisional: j['p'] == 1,
+    ruby: j['r'] as String?,
   );
+}
+
+// 읽는 법은 유니코드 행간 주석 문자로 원문 안에 표시한다: ￹글자￺읽기￻
+const _rubyAnchor = '￹', _rubySep = '￺', _rubyEnd = '￻';
+
+/// (글, 읽기) 조각들 → 저장 형식. 읽기가 빈 조각은 그대로 둔다.
+String rubyMarkup(List<(String, String)> segments) => [
+  for (final (t, r) in segments)
+    r.isEmpty || r == t ? t : '$_rubyAnchor$t$_rubySep$r$_rubyEnd',
+].join();
+
+/// 저장 형식 → (글, 읽기) 조각들. 읽기가 없는 조각은 읽기가 빈 글.
+List<(String, String)> rubySegments(String markup) {
+  final out = <(String, String)>[];
+  final re = RegExp(
+    '$_rubyAnchor([^$_rubySep]*)$_rubySep([^$_rubyEnd]*)$_rubyEnd',
+  );
+  var p = 0;
+  for (final m in re.allMatches(markup)) {
+    if (m.start > p) out.add((markup.substring(p, m.start), ''));
+    out.add((m.group(1)!, m.group(2)!));
+    p = m.end;
+  }
+  if (p < markup.length) out.add((markup.substring(p), ''));
+  return out;
 }
 
 /// 글자의 절반 이상이 한글인 문장 (번역할 필요가 없다)
@@ -158,6 +202,7 @@ BilingualCue trimLingeringEnd(BilingualCue c) {
     translation: c.translation,
     words: c.words,
     provisional: c.provisional,
+    ruby: c.ruby,
   );
 }
 

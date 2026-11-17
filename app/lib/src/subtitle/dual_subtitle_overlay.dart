@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../settings/app_settings.dart' show PracticeMode;
 import 'bilingual_cue.dart';
+import 'ruby_text.dart';
 
 /// 자막 표시 상태 (현재 자막 목록 + 원문/번역 표시 여부).
 /// 전체 화면은 별도 화면(route)이라 부모 setState가 닿지 않으므로,
@@ -17,6 +19,43 @@ class DualSubtitleState extends ChangeNotifier {
   set showVocab(bool v) {
     _showVocab = v;
     notifyListeners();
+  }
+
+  /// 일본어 읽는 법 표시
+  bool get showRuby => _showRuby;
+  bool _showRuby = false;
+  set showRuby(bool v) {
+    _showRuby = v;
+    notifyListeners();
+  }
+
+  /// 듣기 연습 (자막 가리기). 바꾸면 열어 본 줄도 다시 가린다.
+  PracticeMode get practice => _practice;
+  PracticeMode _practice = PracticeMode.off;
+  set practice(PracticeMode v) {
+    _practice = v;
+    _revealed.clear();
+    notifyListeners();
+  }
+
+  /// 듣기 연습에서 열어 본 줄 (시작 시각 ms)
+  final _revealed = <int>{};
+
+  bool _isRevealed(BilingualCue c) =>
+      _revealed.contains(c.start.inMilliseconds);
+
+  bool hidesOriginal(BilingualCue c) =>
+      _practice == PracticeMode.hideAll && !_isRevealed(c);
+
+  bool hidesTranslation(BilingualCue c) =>
+      _practice != PracticeMode.off && !_isRevealed(c);
+
+  /// 가린 데가 있는 줄인지
+  bool hides(BilingualCue c) => hidesOriginal(c) || hidesTranslation(c);
+
+  /// 가린 줄을 연다
+  void reveal(BilingualCue c) {
+    if (_revealed.add(c.start.inMilliseconds)) notifyListeners();
   }
 
   List<BilingualCue> get cues => _cues;
@@ -111,6 +150,9 @@ class LiveDualSubtitle extends StatelessWidget {
           showOriginal: view.showOriginal,
           showTranslation: view.showTranslation,
           showVocab: view.showVocab,
+          showRuby: view.showRuby,
+          hideOriginal: (c) => view.hidesOriginal(c),
+          hideTranslation: (c) => view.hidesTranslation(c),
           onTapCue: onTapCue,
           copied: view.copied,
           wordSaved: wordSaved,
@@ -130,11 +172,19 @@ class DualSubtitleOverlay extends StatelessWidget {
     this.showOriginal = true,
     this.showTranslation = true,
     this.showVocab = false,
+    this.showRuby = false,
+    this.hideOriginal,
+    this.hideTranslation,
     this.onTapCue,
     this.copied = false,
     this.wordSaved,
     this.onTapWord,
   });
+
+  /// 듣기 연습에서 이 줄의 원문·번역을 가릴지
+  final bool Function(BilingualCue)? hideOriginal;
+  final bool Function(BilingualCue)? hideTranslation;
+  final bool showRuby;
 
   final ValueChanged<BilingualCue>? onTapCue;
   final bool Function(String lemma)? wordSaved;
@@ -157,9 +207,19 @@ class DualSubtitleOverlay extends StatelessWidget {
         final h = box.maxHeight.isFinite ? box.maxHeight : 600.0;
         final size = (h * 0.038).clamp(16.0, 48.0);
         final shadow = [Shadow(blurRadius: size * 0.2, color: Colors.black)];
-        final words = showVocab
+        final hideOrig = hideOriginal?.call(c) ?? false;
+        final hideTrans = hideTranslation?.call(c) ?? false;
+        // 원문을 가렸으면 학습 단어도 답이 되므로 감춘다
+        final words = showVocab && !hideOrig
             ? (c.words ?? const <VocabItem>[])
             : const <VocabItem>[];
+        final origStyle = TextStyle(
+          fontSize: size,
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+          shadows: shadow,
+        );
+        final ruby = showRuby ? c.ruby : null;
         final subtitle = Align(
           alignment: Alignment.bottomCenter,
           child: Padding(
@@ -184,7 +244,15 @@ class DualSubtitleOverlay extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (showOriginal)
+                    if (showOriginal && hideOrig)
+                      HiddenLine(fontSize: size * 0.8)
+                    else if (showOriginal && ruby != null)
+                      Text.rich(
+                        TextSpan(children: rubySpans(ruby, origStyle)),
+                        textAlign: TextAlign.center,
+                        style: origStyle,
+                      )
+                    else if (showOriginal)
                       Text.rich(
                         TextSpan(
                           children: [
@@ -206,24 +274,26 @@ class DualSubtitleOverlay extends StatelessWidget {
                           ],
                         ),
                         textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: size,
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                          shadows: shadow,
-                        ),
+                        style: origStyle,
                       ),
                     if (showTranslation && c.translation != null) ...[
                       SizedBox(height: size * 0.15),
-                      Text(
-                        c.translation!,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: size * 0.85,
-                          color: const Color(0xFFFFE082),
-                          shadows: shadow,
+                      if (hideTrans)
+                        HiddenLine(
+                          fontSize: size * 0.7,
+                          // 원문 자리에 이미 안내가 있으면 한 번만
+                          hint: !(showOriginal && hideOrig),
+                        )
+                      else
+                        Text(
+                          c.translation!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: size * 0.85,
+                            color: const Color(0xFFFFE082),
+                            shadows: shadow,
+                          ),
                         ),
-                      ),
                     ],
                   ],
                 ),

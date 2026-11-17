@@ -24,7 +24,10 @@ import '../source/youtube_url.dart';
 import '../source/yt_dlp.dart';
 import '../subtitle/bilingual_cue.dart';
 import '../subtitle/dual_subtitle_overlay.dart';
+import '../study/explain_dialog.dart';
 import '../study/transcript_panel.dart';
+import '../translate/translators.dart' show createTranslator;
+import '../translate/translator.dart' show Explanation, ExplainRequest;
 import '../study/wordbook.dart';
 import '../study/wordbook_dialog.dart';
 import '../pipeline/tools.dart';
@@ -260,6 +263,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       setState(() => _settings = s);
       _rateShown.value = s.playbackRate;
       _view.showVocab = s.showVocab;
+      _view.showRuby = s.showRuby;
+      _view.practice = s.practice;
       _publishPlayInfo();
       // 개발용: DUALCUE_OPEN=<파일 경로> 로 실행하면 바로 연다 (실기기 자동 검증용)
       // DUALCUE_OPEN=ted 는 TED 강연 목록을, settings 는 설정 창을 연다 (설명서 화면 캡처용)
@@ -805,6 +810,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// 자막을 누르면 영상을 멈추고 화면에 보이는 줄을 복사한다
   Future<void> _copyCue(BilingualCue cue) async {
+    // 듣기 연습: 가린 줄은 먼저 열어 보인다
+    if (_view.hides(cue)) {
+      _view.reveal(cue);
+      return;
+    }
     // 복사하려고 멈춘 상태에서 자막을 다시 누르면 이어서 재생한다
     if (_pausedByCopy && !_player.state.playing) {
       await _player.play();
@@ -1239,6 +1249,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     const SingleActivator(LogicalKeyboardKey.keyT): _toggleTranscript,
     const SingleActivator(LogicalKeyboardKey.keyS): _saveCurrentSentence,
     const SingleActivator(LogicalKeyboardKey.keyW): _openWordbook,
+    const SingleActivator(LogicalKeyboardKey.keyH): _cyclePractice,
+    const SingleActivator(LogicalKeyboardKey.keyD): _revealCurrent,
+    const SingleActivator(LogicalKeyboardKey.keyE): _explainCurrent,
+    const SingleActivator(LogicalKeyboardKey.keyK): _toggleRuby,
     const SingleActivator(LogicalKeyboardKey.keyR): _cyclePlayMode,
     const SingleActivator(LogicalKeyboardKey.keyL): _toggleSentenceLoop,
     // Shift+, / Shift+. 는 자판에 따라 논리 키가 달라 글자로 받는다
@@ -1302,6 +1316,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       _source != null && _book.hasSentence(_source!, c.start),
                   onToggleSentence: _toggleSentence,
                   onToggleWord: _toggleWord,
+                  onExplain: _explainCue,
                   onClose: _toggleTranscript,
                 ),
               ),
@@ -1406,6 +1421,118 @@ class _PlayerScreenState extends State<PlayerScreen> {
     } catch (e) {
       _toast('내보내기 실패: $e');
     }
+  }
+
+  /// 듣기 연습: 보통 → 번역 가리기 → 원문·번역 가리기
+  Future<void> _cyclePractice() async {
+    final next = PracticeMode
+        .values[(_settings.practice.index + 1) % PracticeMode.values.length];
+    setState(() {
+      _settings.practice = next;
+      _view.practice = next;
+    });
+    await _settings.save();
+    _toast('듣기 연습: ${next.label} — ${next.detail}');
+  }
+
+  /// D: 지금(없으면 막 지나간) 문장의 가린 부분을 연다
+  void _revealCurrent() {
+    final c = _currentCue();
+    if (c == null || !_view.hides(c)) return;
+    _view.reveal(c);
+  }
+
+  BilingualCue? _currentCue() {
+    final cues = _view.cues;
+    final i = lastCueIndexBefore(cues, _player.state.position);
+    return i < 0 ? null : cues[i];
+  }
+
+  /// 읽는 법(후리가나) 켜기/끄기 — 일본어 자막에만 만든다
+  Future<void> _toggleRuby() async {
+    final on = !_settings.showRuby;
+    setState(() {
+      _settings.showRuby = on;
+      _view.showRuby = on;
+    });
+    await _settings.save();
+    if (on) _job?.kickRuby();
+    final ja = _job?.sourceLang == 'ja';
+    _toast(
+      on
+          ? (ja ? '읽는 법 켜짐 (K)' : '읽는 법 켜짐 (K) — 일본어 자막에만 표시됩니다')
+          : '읽는 법 꺼짐 (K)',
+    );
+  }
+
+  /// 해설은 같은 문장을 다시 물을 때 다시 요청하지 않는다
+  final _explained = <String, Future<Explanation>>{};
+
+  void _explainCurrent() {
+    final c = _currentCue();
+    if (c == null) {
+      _toast('해설할 문장이 없습니다');
+      return;
+    }
+    unawaited(_explainCue(c));
+  }
+
+  /// 문장 해설 (AI). 보는 동안 영상을 멈추고, 닫으면 이어서 재생한다.
+  Future<void> _explainCue(BilingualCue c) async {
+    if (!_settings.hasTranslateKey) {
+      _toast('설정(⚙)에서 ${_settings.provider.label} API 키를 등록하면 해설을 볼 수 있습니다');
+      return;
+    }
+    final cues = _view.cues;
+    final i = cues.indexOf(c);
+    final key = '${_settings.vocabLevel.name}|${c.original}';
+    final cached = _explained[key];
+    final future = _explained[key] =
+        cached ??
+        createTranslator(_settings).explain(
+          ExplainRequest(
+            sourceLang: _job?.sourceLang ?? 'auto',
+            sentence: c.original,
+            translation: c.translation,
+            before: [
+              if (i > 0)
+                for (final p in cues.sublist(i < 3 ? 0 : i - 3, i)) p.original,
+            ],
+            after: [
+              if (i >= 0)
+                for (final p in cues.skip(i + 1).take(2)) p.original,
+            ],
+          ),
+          _settings.vocabLevel,
+        );
+    // 실패한 해설은 다음에 다시 요청한다
+    unawaited(future.then((_) {}, onError: (_) => _explained.remove(key)));
+    final wasPlaying = _player.state.playing;
+    await _player.pause();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => ExplainDialog(
+        cue: c,
+        explanation: future,
+        onSave: (e) {
+          final src = _source;
+          if (src == null) return;
+          unawaited(
+            _book.put(
+              StudyItem.ofSentence(
+                c,
+                source: src,
+                title: _title,
+                note: e.asText,
+              ),
+            ),
+          );
+          _toast('해설과 함께 단어장에 저장했습니다 (W)');
+        },
+      ),
+    );
+    if (wasPlaying && mounted) await _player.play();
   }
 
   /// 학습 단어 켜기/끄기 (켜져 있을 때만 AI로 단어를 만든다)
@@ -2011,6 +2138,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
           onPressed: _opened ? _toggleTranscript : null,
         ),
       ),
+      IconButton(
+        tooltip: '듣기 연습: ${_settings.practice.label} (H)',
+        icon: Icon(
+          _settings.practice == PracticeMode.off
+              ? Icons.hearing_outlined
+              : Icons.hearing,
+          color: _settings.practice == PracticeMode.off
+              ? null
+              : const Color(0xFF80DEEA),
+        ),
+        onPressed: _cyclePractice,
+      ),
+      // 읽는 법은 일본어 자막일 때만
+      if (_job?.sourceLang == 'ja')
+        IconButton(
+          tooltip: '읽는 법 (후리가나, K)',
+          icon: Icon(
+            Icons.font_download_outlined,
+            color: _settings.showRuby ? const Color(0xFF80DEEA) : null,
+          ),
+          onPressed: _toggleRuby,
+        ),
       IconButton(
         tooltip: '단어장 (W)',
         icon: const Icon(Icons.bookmarks_outlined),

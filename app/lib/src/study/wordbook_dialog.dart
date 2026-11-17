@@ -197,6 +197,19 @@ class _WordbookDialogState extends State<WordbookDialog> {
                       it.translation!,
                       style: TextStyle(fontSize: 13, color: muted),
                     ),
+                  if (it.note != null)
+                    Container(
+                      margin: const EdgeInsets.only(top: 6),
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        it.note!,
+                        style: const TextStyle(fontSize: 13, height: 1.4),
+                      ),
+                    ),
                   const SizedBox(height: 4),
                   Text(
                     '${it.title}  ·  ${formatPosition(it.start)}',

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -34,8 +35,43 @@ class VocabBatch {
   final Map<int, String> items;
 }
 
+/// 문장 해설 요청: 해설할 문장과 앞뒤 문맥
+class ExplainRequest {
+  const ExplainRequest({
+    required this.sourceLang,
+    required this.sentence,
+    this.translation,
+    this.before = const [],
+    this.after = const [],
+  });
+  final String sourceLang;
+  final String sentence;
+  final String? translation;
+  final List<String> before;
+  final List<String> after;
+}
+
+/// 문장 해설: 짚어 볼 표현들과 문장 전체의 뉘앙스
+class Explanation {
+  const Explanation({required this.points, required this.nuance});
+  final List<({String phrase, String note})> points;
+  final String nuance;
+
+  /// 단어장에 함께 저장할 글
+  String get asText => [
+    for (final p in points) '${p.phrase}: ${p.note}',
+    if (nuance.isNotEmpty) nuance,
+  ].join('\n');
+}
+
 /// 공급자 공통 인터페이스 (Claude / OpenAI / Gemini)
 abstract interface class Translator {
+  /// 문장 하나를 학습자에게 풀어 설명한다
+  Future<Explanation> explain(ExplainRequest req, VocabLevel level);
+
+  /// 일본어 줄마다 한자에 읽는 법을 단다 (줄 id → [rubyMarkup] 형식)
+  Future<Map<int, String>> furigana(Map<int, String> lines);
+
   Future<Map<int, String>> translate(TranslationBatch batch);
 
   /// 학습 단어 추출 (줄 id → 단어 0~2개)
@@ -121,6 +157,103 @@ const vocabSchema = <String, Object?>{
   'additionalProperties': false,
 };
 
+String explainSystem(VocabLevel level) =>
+    '''
+You are a friendly tutor explaining one line of a video's subtitles to a Korean learner of the source language.
+The learner's level is ${level.cefr} (${level.description}).
+Rules:
+- Write every explanation in Korean, short and concrete.
+- "points": 1 to 4 items. Each "phrase" is copied exactly from the line (a word, expression, grammar pattern or idiom worth knowing);
+  "note" explains its meaning, the grammar or usage, and why it is used here, in 1-2 sentences.
+  Prefer what this learner would find hard; skip trivial words.
+- "nuance": 1-2 sentences on the tone, feeling or implied meaning of the whole line in this context (casual/polite, sarcasm, emotion).
+- The surrounding lines are context only; explain only the target line.
+- Output only the JSON object defined by the schema.''';
+
+const explainSchema = <String, Object?>{
+  'type': 'object',
+  'properties': {
+    'points': {
+      'type': 'array',
+      'items': {
+        'type': 'object',
+        'properties': {
+          'phrase': {'type': 'string'},
+          'note': {'type': 'string'},
+        },
+        'required': ['phrase', 'note'],
+        'additionalProperties': false,
+      },
+    },
+    'nuance': {'type': 'string'},
+  },
+  'required': ['points', 'nuance'],
+  'additionalProperties': false,
+};
+
+Explanation explanationOf(Map<String, dynamic> out) => Explanation(
+  points: [
+    for (final p in (out['points'] as List).cast<Map>())
+      (phrase: '${p['phrase']}'.trim(), note: '${p['note']}'.trim()),
+  ],
+  nuance: '${out['nuance'] ?? ''}'.trim(),
+);
+
+const furiganaSystem = '''
+You add furigana (hiragana readings) to Japanese subtitle lines.
+For each line, return "segments" that, concatenated, reproduce the line EXACTLY (same characters, same order, nothing added or removed).
+Split the line so that every run of kanji (with its okurigana left outside) is its own segment with "reading" in hiragana,
+read as it is pronounced in this context. All other text (kana, punctuation, latin, numbers) goes in segments with an empty "reading".
+Return every input id. Output only the JSON object defined by the schema.''';
+
+const furiganaSchema = <String, Object?>{
+  'type': 'object',
+  'properties': {
+    'items': {
+      'type': 'array',
+      'items': {
+        'type': 'object',
+        'properties': {
+          'id': {'type': 'integer'},
+          'segments': {
+            'type': 'array',
+            'items': {
+              'type': 'object',
+              'properties': {
+                'text': {'type': 'string'},
+                'reading': {'type': 'string'},
+              },
+              'required': ['text', 'reading'],
+              'additionalProperties': false,
+            },
+          },
+        },
+        'required': ['id', 'segments'],
+        'additionalProperties': false,
+      },
+    },
+  },
+  'required': ['items'],
+  'additionalProperties': false,
+};
+
+/// 읽는 법 결과 JSON → 줄 id별 [rubyMarkup]. 이어 붙인 글이 원래 줄과 다르면 버린다.
+Map<int, String> furiganaOf(Map<String, dynamic> out, Map<int, String> lines) {
+  final result = <int, String>{};
+  for (final it in (out['items'] as List).cast<Map>()) {
+    final id = (it['id'] as num).toInt();
+    final line = lines[id];
+    if (line == null) continue;
+    final segs = [
+      for (final s in (it['segments'] as List).cast<Map>())
+        ('${s['text']}', '${s['reading']}'.trim()),
+    ];
+    if (segs.map((s) => s.$1).join() != line) continue;
+    result[id] = rubyMarkup(segs);
+  }
+  return result;
+}
+
 /// 모델이 돌려준 JSON 글자를 읽는다. 깨진 JSON은 다시 요청하면 되는 오류로 본다.
 Map<String, dynamic> decodeModelJson(String text) {
   try {
@@ -204,6 +337,34 @@ abstract class LlmTranslator implements Translator {
         ],
       });
 
+  /// 문장 해설 요청 본문 (테스트용으로 분리)
+  Map<String, Object?> buildExplainBody(ExplainRequest r, VocabLevel level) =>
+      envelope(explainSystem(level), explainSchema, {
+        'source_language': r.sourceLang,
+        'before': r.before,
+        'line': r.sentence,
+        'korean_translation': ?r.translation,
+        'after': r.after,
+      });
+
+  @override
+  Future<Explanation> explain(ExplainRequest req, VocabLevel level) => _request(
+    jsonEncode(buildExplainBody(req, level)),
+    (j) => explanationOf(outputJson(j)),
+  );
+
+  @override
+  Future<Map<int, String>> furigana(Map<int, String> lines) => _request(
+    jsonEncode(
+      envelope(furiganaSystem, furiganaSchema, {
+        'items': [
+          for (final e in lines.entries) {'id': e.key, 'text': e.value},
+        ],
+      }),
+    ),
+    (j) => furiganaOf(outputJson(j), lines),
+  );
+
   @override
   Future<Map<int, String>> translate(TranslationBatch batch) => _request(
     jsonEncode(buildBody(batch)),
@@ -229,27 +390,42 @@ abstract class LlmTranslator implements Translator {
       } on TranslateException catch (e) {
         if (!e.retryable || attempt >= 4) rethrow;
         await Future<void>.delayed(Duration(seconds: 2 << attempt));
-      } on IOException {
-        if (attempt >= 4) rethrow;
+      } on IOException catch (e) {
+        // 연결 오류도 여러 번 실패하면 안내할 수 있는 오류로 바꾼다
+        // (그냥 던지면 번역 루프가 안내 없이 멈췄다)
+        if (attempt >= 4) {
+          throw TranslateException('$providerName 연결 실패: $e');
+        }
         await Future<void>.delayed(Duration(seconds: 2 << attempt));
       }
     }
   }
 
+  /// 응답을 기다리는 최대 시간. 넘으면 끊고 다시 요청한다.
+  /// (실측: API 응답이 오지 않은 채 연결만 남아 번역이 몇 분씩 멈췄다)
+  static const responseTimeout = Duration(seconds: 90);
+
   Future<Map<String, dynamic>> _post(String body) async {
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 30);
+    var force = false;
     try {
       final req = await client.postUrl(endpoint);
       headers.forEach(req.headers.set);
       req.add(utf8.encode(body));
-      final res = await req.close().timeout(const Duration(minutes: 5));
-      final text = await res.transform(utf8.decoder).join();
+      final res = await req.close().timeout(responseTimeout);
+      final text = await res
+          .transform(utf8.decoder)
+          .join()
+          .timeout(responseTimeout);
       final code = res.statusCode;
       if (code == 200) return jsonDecode(text) as Map<String, dynamic>;
       throw httpError(code, text);
+    } on TimeoutException {
+      force = true; // 기다리던 연결을 끊는다
+      throw TranslateException('$providerName 응답 지연', retryable: true);
     } finally {
-      client.close();
+      client.close(force: force);
     }
   }
 
