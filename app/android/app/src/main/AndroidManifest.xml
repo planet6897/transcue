@@ -1,8 +1,13 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Claude 번역 · OpenSubtitles · 인터넷 영상 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 앱 안에서 새 버전 APK 설치 화면을 연다 (자동 업데이트) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 화면 밝기를 기기 밝기(설정·알림창 밝기와 같은 값)로 바꾼다. 사용자가 설정에서 허용해야 한다 -->
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
     <!-- 기기의 동영상을 실제 경로로 열기 (13+: 동영상, 12 이하: 저장소) -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission

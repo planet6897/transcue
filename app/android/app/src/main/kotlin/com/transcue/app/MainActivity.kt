@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.widget.Toast
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -74,33 +75,46 @@ class MainActivity : FlutterActivity() {
                             audio.getStreamVolume(AudioManager.STREAM_MUSIC).toDouble() / max,
                         )
                     }
+                    "getMute" -> result.success(audio.isStreamMute(AudioManager.STREAM_MUSIC))
+                    "setMute" -> {
+                        audio.adjustStreamVolume(
+                            AudioManager.STREAM_MUSIC,
+                            if (call.arguments == true) AudioManager.ADJUST_MUTE
+                            else AudioManager.ADJUST_UNMUTE,
+                            0,
+                        )
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }
-        // 화면 왼쪽을 위/아래로 밀어 밝기 조절: 이 앱 창의 밝기만 바꾼다 (0~1, 권한 불필요).
-        // reset 하면 기기 설정 밝기로 돌아간다
+        // 화면 왼쪽을 위/아래로 밀어 밝기 조절 (0~1).
+        // 허용되어 있으면 기기 밝기(알림창 밝기와 같은 값)를 바꾸고, 아니면 이 앱 창의 밝기만 바꾼다.
+        // 처음 한 번은 기기 밝기를 바꿀 수 있게 허용하는 설정 화면을 연다.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "transcue/brightness")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "get" -> {
                         val own = window.attributes.screenBrightness
                         result.success(
-                            if (own >= 0f) own.toDouble()
-                            else Settings.System.getInt(
-                                contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128,
-                            ).coerceIn(0, 255) / 255.0,
+                            if (own >= 0f && !canWriteSystem()) own.toDouble()
+                            else systemBrightness(),
                         )
                     }
                     "set" -> {
                         val v = (call.arguments as Number).toFloat().coerceIn(0.01f, 1f)
-                        window.attributes = window.attributes.apply { screenBrightness = v }
+                        if (canWriteSystem()) {
+                            setSystemBrightness(v)
+                            // 앱 창 밝기를 덮어써 두었으면 풀어야 기기 밝기가 보인다
+                            clearWindowBrightness()
+                        } else {
+                            window.attributes = window.attributes.apply { screenBrightness = v }
+                            askWriteSettingsOnce()
+                        }
                         result.success(v.toDouble())
                     }
                     "reset" -> {
-                        window.attributes = window.attributes.apply {
-                            screenBrightness =
-                                android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-                        }
+                        clearWindowBrightness()
                         result.success(null)
                     }
                     else -> result.notImplemented()
@@ -128,6 +142,50 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    private fun canWriteSystem(): Boolean = Settings.System.canWrite(this)
+
+    private fun systemBrightness(): Double =
+        Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128)
+            .coerceIn(0, 255) / 255.0
+
+    /// 기기 밝기를 바꾼다. 자동 밝기가 켜져 있으면 곧 덮어쓰이므로 수동으로 바꾼다
+    /// (알림창 밝기 막대를 움직일 때와 같다)
+    private fun setSystemBrightness(v: Float) {
+        Settings.System.putInt(
+            contentResolver,
+            Settings.System.SCREEN_BRIGHTNESS_MODE,
+            Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL,
+        )
+        Settings.System.putInt(
+            contentResolver,
+            Settings.System.SCREEN_BRIGHTNESS,
+            Math.round(v * 255).coerceIn(1, 255),
+        )
+    }
+
+    private fun clearWindowBrightness() {
+        if (window.attributes.screenBrightness < 0f) return
+        window.attributes = window.attributes.apply {
+            screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        }
+    }
+
+    /// 기기 밝기를 바꿀 수 있게 허용하는 설정 화면을 처음 한 번만 연다 (거절해도 앱 창 밝기로 동작)
+    private fun askWriteSettingsOnce() {
+        val prefs = getSharedPreferences("transcue", MODE_PRIVATE)
+        if (prefs.getBoolean("askedWriteSettings", false)) return
+        prefs.edit().putBoolean("askedWriteSettings", true).apply()
+        Toast.makeText(
+            this,
+            "화면 밝기를 기기 밝기와 맞추려면 '시스템 설정 변경'을 허용해 주세요",
+            Toast.LENGTH_LONG,
+        ).show()
+        startActivity(
+            Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS)
+                .setData(Uri.fromParts("package", packageName, null)),
+        )
     }
 
     /// TV: 기본(Android) 입력창. Flutter 입력란에서는 리모컨 방향키가 앱으로 가서 화면 키보드

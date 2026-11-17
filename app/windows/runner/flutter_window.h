@@ -35,6 +35,14 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       drop_channel_;
   DropTarget* drop_target_ = nullptr;
+
+  // Windows 시스템 음량 (transcue/volume): get·set(0~1), getMute·setMute
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      volume_channel_;
+
+  // 화면 밝기 (transcue/brightness): get·set(0~1). 안 되는 화면이면 오류
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      brightness_channel_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
