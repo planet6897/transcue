@@ -51,7 +51,15 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
   final _current = ValueNotifier<int>(-1);
   final _scroll = ScrollController();
   StreamSubscription<Duration>? _sub;
-  List<GlobalKey> _keys = const [];
+
+  /// 줄마다 붙이는 키 (자동으로 따라갈 때 그 줄을 찾는다). 줄 번호가 아니라 시작 시각으로
+  /// 붙여, 음성 인식이 줄을 끼워 넣어도 다른 줄들은 그대로 남는다.
+  final Map<String, GlobalKey> _keys = {};
+  List<String> _ids = const [];
+
+  /// 만들어 둔 줄. 내용이 같으면 같은 위젯을 그대로 돌려줘 다시 그리지 않는다
+  /// (줄 하나가 바뀔 때마다 목록 전체를 다시 그리면 긴 영상에서 버벅였다).
+  final Map<String, (Object, Widget)> _tiles = {};
 
   /// 사용자가 목록을 직접 굴린 때. 잠시 동안은 지금 문장으로 따라가지 않는다.
   DateTime _userScrolledAt = DateTime(0);
@@ -83,13 +91,13 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
   void _follow({bool jump = false}) {
     if (!mounted) return;
     final i = _current.value;
-    if (i < 0 || i >= _keys.length) return;
+    if (i < 0 || i >= _ids.length) return;
     if (!jump &&
         DateTime.now().difference(_userScrolledAt) <
             const Duration(seconds: 4)) {
       return;
     }
-    final ctx = _keys[i].currentContext;
+    final ctx = _keys[_ids[i]]?.currentContext;
     if (ctx == null) return;
     Scrollable.ensureVisible(
       ctx,
@@ -109,8 +117,8 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
         listenable: Listenable.merge([widget.view, widget.book]),
         builder: (context, _) {
           final cues = widget.view.cues;
-          if (_keys.length != cues.length) {
-            _keys = List.generate(cues.length, (_) => GlobalKey());
+          final ids = _idsOf(cues);
+          if (ids.length != _ids.length) {
             // 음성 인식이 줄을 끼워 넣으면 지금 문장 번호가 달라진다
             // (그리는 중에는 다른 줄을 다시 그리게 할 수 없어 다음 프레임에)
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -119,6 +127,8 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
               _update(widget.currentPosition());
             });
           }
+          _ids = ids;
+          if (_keys.length > ids.length * 2 + 50) _prune(ids);
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -144,30 +154,7 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               for (var i = 0; i < cues.length; i++)
-                                _CueTile(
-                                  key: _keys[i],
-                                  index: i,
-                                  current: _current,
-                                  cue: cues[i],
-                                  showOriginal: widget.view.showOriginal,
-                                  showTranslation: widget.view.showTranslation,
-                                  showVocab: widget.view.showVocab,
-                                  showRuby: widget.view.showRuby,
-                                  hideOriginal: widget.view.hidesOriginal(
-                                    cues[i],
-                                  ),
-                                  hideTranslation: widget.view.hidesTranslation(
-                                    cues[i],
-                                  ),
-                                  onExplain: () => widget.onExplain(cues[i]),
-                                  saved: widget.sentenceSaved(cues[i]),
-                                  wordSaved: widget.book.hasWord,
-                                  onTap: () => widget.onSeek(cues[i]),
-                                  onToggleSentence: () =>
-                                      widget.onToggleSentence(cues[i]),
-                                  onToggleWord: (w) =>
-                                      widget.onToggleWord(cues[i], w),
-                                ),
+                                _tile(i, cues[i], ids[i]),
                             ],
                           ),
                         ),
@@ -178,6 +165,69 @@ class _TranscriptPanelState extends State<TranscriptPanel> {
         },
       ),
     );
+  }
+
+  /// 줄마다 고유한 이름: 시작 시각 (같은 시각이 겹치면 순번을 붙인다)
+  static List<String> _idsOf(List<BilingualCue> cues) {
+    final ids = List<String>.filled(cues.length, '');
+    var dup = 0;
+    for (var i = 0; i < cues.length; i++) {
+      final ms = cues[i].start.inMilliseconds;
+      dup = i > 0 && cues[i - 1].start.inMilliseconds == ms ? dup + 1 : 0;
+      ids[i] = dup == 0 ? '$ms' : '$ms#$dup';
+    }
+    return ids;
+  }
+
+  void _prune(List<String> ids) {
+    final live = ids.toSet();
+    _keys.removeWhere((id, _) => !live.contains(id));
+    _tiles.removeWhere((id, _) => !live.contains(id));
+  }
+
+  Widget _tile(int i, BilingualCue cue, String id) {
+    final v = widget.view;
+    final hideO = v.hidesOriginal(cue);
+    final hideT = v.hidesTranslation(cue);
+    final saved = widget.sentenceSaved(cue);
+    final words = cue.words;
+    // 이 줄의 모양을 정하는 값들. 모두 같으면 만들어 둔 위젯을 그대로 쓴다.
+    final sig = (
+      cue,
+      i,
+      v.showOriginal,
+      v.showTranslation,
+      v.showVocab,
+      v.showRuby,
+      hideO,
+      hideT,
+      saved,
+      v.showVocab && words != null
+          ? [for (final w in words) widget.book.hasWord(w.lemma) ? 1 : 0].join()
+          : '',
+    );
+    final cached = _tiles[id];
+    if (cached != null && cached.$1 == sig) return cached.$2;
+    final tile = _CueTile(
+      key: _keys.putIfAbsent(id, GlobalKey.new),
+      index: i,
+      current: _current,
+      cue: cue,
+      showOriginal: v.showOriginal,
+      showTranslation: v.showTranslation,
+      showVocab: v.showVocab,
+      showRuby: v.showRuby,
+      hideOriginal: hideO,
+      hideTranslation: hideT,
+      onExplain: () => widget.onExplain(cue),
+      saved: saved,
+      wordSaved: widget.book.hasWord,
+      onTap: () => widget.onSeek(cue),
+      onToggleSentence: () => widget.onToggleSentence(cue),
+      onToggleWord: (w) => widget.onToggleWord(cue, w),
+    );
+    _tiles[id] = (sig, tile);
+    return tile;
   }
 
   Widget _header(int count) => Padding(

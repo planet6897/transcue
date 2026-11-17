@@ -311,14 +311,38 @@ class SubtitleJob extends ChangeNotifier {
   /// 개발용 스위치 (실기기 검증 시 저장 결과·API 비용에 영향 없게)
   static bool _dbg(String k) => kDebugMode && Platform.environment[k] == '1';
 
-  Future<void> _saveCache() async {
+  /// 진행 중인 저장. 번역·학습 단어·읽는 법·음성 인식이 따로 저장을 부르므로,
+  /// 쓰는 중에 또 부르면 같은 파일에 동시에 쓰지 않고 끝난 뒤 한 번 더 쓴다.
+  Future<void>? _saving;
+  bool _saveAgain = false;
+
+  Future<void> _saveCache() {
+    if (_saving != null) {
+      _saveAgain = true;
+      return _saving!;
+    }
+    return _saving = () async {
+      try {
+        do {
+          _saveAgain = false;
+          await _writeCache();
+        } while (_saveAgain);
+      } finally {
+        _saving = null;
+      }
+    }();
+  }
+
+  Future<void> _writeCache() async {
     if (_dbg('DUALCUE_NO_CACHE')) return;
     // 중단된 작업은 저장하지 않는다. 일부만 인식한 결과가 완료로 기록되거나,
     // 다시 만들기를 시작한 새 작업의 결과를 덮어쓰게 된다.
     if (_disposed) return;
     if (cues.isEmpty && _covered.isEmpty) return;
     final f = await _cacheFile();
-    await f.writeAsString(
+    // 임시 파일에 다 쓴 뒤 바꿔 넣는다 (쓰는 도중 앱이 꺼져도 저장본이 깨지지 않게)
+    final tmp = File('${f.path}.tmp');
+    await tmp.writeAsString(
       jsonEncode({
         'v': _cacheVersion,
         'lang': sourceLang,
@@ -339,7 +363,9 @@ class SubtitleJob extends ChangeNotifier {
           ],
         'cues': [for (final c in cues) c.toJson()],
       }),
+      flush: true,
     );
+    await tmp.rename(f.path);
   }
 
   /// 저장된 결과를 읽는다. 버린 경우 읽다 만 값(싱크 정보 등)이 남지 않게 되돌린다.

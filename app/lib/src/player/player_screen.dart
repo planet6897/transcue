@@ -101,6 +101,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// Android 지나간 부분을 들고 있는 크기. 이전 문장으로 돌아갈 만큼(1080p로 10~20초)이면 된다.
   static const _androidBackBuffer = 6 * 1024 * 1024;
 
+  /// 미리 받아 둘 크기를 영상 종류에 맞춘다. 내 파일은 디스크에서 바로 읽으므로 조금만
+  /// 들고 있어도 된다 (Windows 실측: 1080p를 열 때 메모리가 1GB까지 튀던 것이 사라짐).
+  /// 인터넷 영상은 끊기지 않게 지금처럼 넉넉히 둔다.
+  Future<void> _useBuffers({required bool local}) async {
+    final native = _player.platform;
+    if (native is! NativePlayer) return;
+    final ahead = local
+        ? 8 * 1024 * 1024
+        : Platform.isAndroid
+        ? _androidBuffer
+        : 32 * 1024 * 1024;
+    final back = local
+        ? 4 * 1024 * 1024
+        : Platform.isAndroid
+        ? _androidBackBuffer
+        : 32 * 1024 * 1024;
+    try {
+      await native.setProperty('demuxer-max-bytes', '$ahead');
+      await native.setProperty('demuxer-max-back-bytes', '$back');
+    } catch (e) {
+      debugPrint('[buffer] $e');
+    }
+  }
+
   /// TV인지 알고 나서([_deviceKnown]) 처음 그릴 때 만든다.
   /// Android: 기본 출력(vo=gpu, mediacodec-copy)은 디코딩한 화면을 복사하느라 영상을 따라가지
   /// 못해 느리게 재생되고 소리·자막과 어긋났다 (Chromecast 1080p 0.6배속, 갤럭시 탭 S9
@@ -468,6 +492,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     await _beginCount(PlaybackPositions.keyForPath(path));
     unawaited(_rememberRecent(path, _title));
     final loaded = _durationLoaded();
+    await _useBuffers(local: true);
     await _player.open(Media(path));
     _switching = false;
     await _applyRate();
@@ -590,6 +615,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       final loaded = _player.stream.duration
           .firstWhere((d) => d > Duration.zero)
           .timeout(const Duration(seconds: 30));
+      await _useBuffers(local: false);
       await _player.open(Media(media.videoUrl, httpHeaders: media.httpHeaders));
       await _applyRate();
       if (media.audioUrl != null) {
