@@ -25,7 +25,9 @@
   ```
   앱에 Apple 개발자 서명·공증이 없어서 브라우저로 받은 zip은 macOS가 열지 못하게 막는다.
   이미 브라우저로 받았다면 `xattr -cr /Applications/Transcue.app` 을 실행하면 열린다.
-- **Windows**: `transcue-X.Y.Z-windows-x64.zip`을 풀고 `transcue.exe` 실행. 처음에 "Windows의 PC 보호"가 뜨면 추가 정보 → 실행.
+- **Windows**: `transcue-X.Y.Z-windows-x64-setup.exe`를 실행한다 (관리자 권한 불필요, 시작 메뉴에 등록, 설정 → 앱에서 제거).
+  yt-dlp가 없으면 설치하면서 함께 받는다. 처음에 "Windows의 PC 보호"가 뜨면 추가 정보 → 실행.
+  설치 없이 쓰려면 `transcue-X.Y.Z-windows-x64.zip`을 풀고 `transcue.exe` 실행.
 - **Linux**: `transcue-X.Y.Z-linux-x64.tar.gz`를 풀고 `transcue` 실행 (mpv 라이브러리 필요: `sudo apt install libmpv2`).
 - **Android**: `transcue-X.Y.Z-android.apk` 설치 (출처를 알 수 없는 앱 허용).
 

@@ -24,8 +24,9 @@ Windows 실행 파일 버전은 이 값을 그대로 쓰고, 앱 설정 화면 �
    powershell -File scripts/release.ps1 -DryRun   # 빌드와 묶기만 확인
    powershell -File scripts/release.ps1           # 태그 vX.Y.Z + GitHub Release
    ```
-   테스트 → Windows·Android 릴리즈 빌드 → `dist/X.Y.Z/`에 `transcue-X.Y.Z-windows-x64.zip`,
-   `transcue-X.Y.Z-android.apk` → 태그 → GitHub Release (설명은 CHANGELOG의 그 버전 항목).
+   테스트 → Windows·Android 릴리즈 빌드 → `dist/X.Y.Z/`에 `transcue-X.Y.Z-windows-x64-setup.exe`,
+   `transcue-X.Y.Z-windows-x64.zip`, `transcue-X.Y.Z-android.apk` → 태그 → GitHub Release (설명은 CHANGELOG의 그 버전 항목).
+   설치본은 Inno Setup 6으로 만든다 (`winget install JRSoftware.InnoSetup`, 없으면 빌드 전에 멈춘다).
    main이 origin과 다르거나, 같은 태그가 있거나, 커밋하지 않은 변경이 있으면 멈춘다.
 4. macOS는 Release가 만들어지면 GitHub Actions(`.github/workflows/release-macos.yml`)가
    macOS 서버에서 빌드해 `transcue-X.Y.Z-macos-universal.zip`을 같은 Release에 붙인다 (Mac 불필요, 10분 안팎).
@@ -37,7 +38,7 @@ Windows 실행 파일 버전은 이 값을 그대로 쓰고, 앱 설정 화면 �
 
 | 플랫폼 | 파일 | 만드는 곳 |
 |---|---|---|
-| Windows 11 (x64) | `transcue-X.Y.Z-windows-x64.zip` | `release.ps1` (Windows PC) |
+| Windows 11 (x64) | `transcue-X.Y.Z-windows-x64-setup.exe` (설치본), `transcue-X.Y.Z-windows-x64.zip` | `release.ps1` (Windows PC) |
 | macOS (Intel·Apple Silicon) | `transcue-X.Y.Z-macos-universal.zip` | GitHub Actions macOS 서버 |
 | Linux (x64) | `transcue-X.Y.Z-linux-x64.tar.gz` | GitHub Actions Ubuntu 서버 |
 | Android (64비트 ARM 권장) | `transcue-X.Y.Z-android.apk` | `release.ps1` (Windows PC) |
@@ -49,7 +50,12 @@ CI가 PR마다 macOS를 release로 빌드해 앱 안의 모든 실행 파일·�
 ## 참고
 
 - Android APK는 아직 debug 키로 서명한다 (`app/android/app/build.gradle.kts`). 정식 배포 전에 배포용 키를 만들어야 한다.
-- Windows는 설치본 없이 zip으로 배포한다 (Release 폴더 전체를 풀어 `transcue.exe` 실행).
+- Windows 설치본(`scripts/windows-installer.iss`)은 관리자 권한 없이 `%LOCALAPPDATA%\Programs\Transcue`에 설치한다.
+  앱 안 업데이트가 앱 폴더에 zip을 풀어 덮어쓰므로 쓸 수 있는 곳이어야 한다 (그래서 Release에 zip도 계속 올린다).
+  yt-dlp를 찾지 못하면 GitHub 최신판을 받아 `%LOCALAPPDATA%\Programs\yt-dlp`에 둔다 (받지 못해도 설치는 계속, 제거할 때 지우지 않음).
+  ffmpeg·whisper.cpp는 아직 `scripts/setup-windows.ps1`로 설치한다. 코드 서명은 하지 않아 SmartScreen 경고가 뜬다.
+  MSIX는 신뢰된 인증서로 서명하지 않으면 설치 자체가 되지 않아 쓰지 않는다.
+  설치본의 `AppId`는 바꾸지 않는다 (바꾸면 업그레이드 대신 따로 설치된다).
 - macOS 앱은 아직 Apple 개발자 서명·공증을 하지 않았다 (임시 서명만). 브라우저로 받은 zip은 macOS가 막으므로
   터미널 설치를 안내한다: `curl -fsSL https://raw.githubusercontent.com/planet6897/transcue/main/scripts/install-macos.sh | bash`
   (curl로 받은 파일은 "인터넷에서 받음" 표시가 없어 그대로 열린다). 이미 브라우저로 받았으면

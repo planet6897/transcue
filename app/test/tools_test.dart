@@ -18,6 +18,7 @@ void main() {
   test('환경 변수가 있는 Windows 설치 폴더만 후보에 넣는다', () {
     expect(windowsToolDirs({'LOCALAPPDATA': r'C:\L'}), [
       r'C:\L\Programs\whisper.cpp',
+      r'C:\L\Programs\yt-dlp',
       r'C:\L\Microsoft\WinGet\Links',
     ]);
     expect(windowsToolDirs({}), isEmpty);

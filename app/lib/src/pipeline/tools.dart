@@ -45,6 +45,7 @@ List<String> windowsToolDirs(Map<String, String> env) {
   return [
     if (local != null) ...[
       '$local\\Programs\\whisper.cpp', // scripts/setup-windows.ps1
+      '$local\\Programs\\yt-dlp', // Windows 설치본 (scripts/windows-installer.iss)
       '$local\\Microsoft\\WinGet\\Links',
     ],
     if (programFiles != null) '$programFiles\\WinGet\\Links',
