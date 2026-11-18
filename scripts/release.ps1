@@ -1,5 +1,6 @@
 ﻿# 배포: main의 지금 버전을 빌드해 태그(vX.Y.Z)를 달고 GitHub Release에 올린다.
-#  - Windows: transcue-X.Y.Z-windows-x64.zip (Release 폴더 전체)
+#  - Windows: transcue-X.Y.Z-windows-x64-setup.exe (설치본, Inno Setup 6 필요: winget install JRSoftware.InnoSetup)
+#             transcue-X.Y.Z-windows-x64.zip (Release 폴더 전체. 앱 안 업데이트가 이것을 받는다)
 #  - Android: transcue-X.Y.Z-android.apk
 # 버전은 scripts/bump-version.ps1로 미리 올려 main에 넣어 둔다.
 #
@@ -50,6 +51,15 @@ try {
     if (-not $sec.Success) { throw "CHANGELOG.md에 ## [$ver] 항목이 없습니다" }
     $notes = $sec.Groups[1].Value.Trim()
 
+    # 설치본을 만드는 Inno Setup 컴파일러 (빌드 전에 확인해 오래 기다린 뒤 멈추지 않게)
+    $iscc = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
+        (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $iscc) { $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source }
+    if (-not $iscc) { throw 'Inno Setup 6이 없습니다: winget install JRSoftware.InnoSetup' }
+
     # ---- 테스트와 빌드 ----
     Push-Location $app
     try {
@@ -64,7 +74,11 @@ try {
     $zip = Join-Path $dist "transcue-$ver-windows-x64.zip"
     $apk = Join-Path $dist "transcue-$ver-android.apk"
     if (Test-Path $zip) { Remove-Item $zip -Confirm:$false }
-    Compress-Archive -Path (Join-Path $app 'build/windows/x64/runner/Release/*') -DestinationPath $zip
+    $winRelease = Join-Path $app 'build\windows\x64\runner\Release'
+    Compress-Archive -Path (Join-Path $winRelease '*') -DestinationPath $zip
+    $setup = Join-Path $dist "transcue-$ver-windows-x64-setup.exe"
+    Run $iscc @('/Q', "/DAppVersion=$ver", "/DSourceDir=$winRelease", "/DOutputDir=$dist",
+        (Join-Path $PSScriptRoot 'windows-installer.iss'))
     Copy-Item (Join-Path $app 'build/app/outputs/flutter-apk/app-release.apk') $apk -Force
     $notesPath = Join-Path $dist 'notes.md'
     [IO.File]::WriteAllText($notesPath, $notes, $utf8)
@@ -78,7 +92,7 @@ try {
     # ---- 태그와 GitHub Release ----
     Run git @('tag', '-a', $tag, '-m', "Transcue $ver")
     Run git @('push', 'origin', $tag)
-    Run gh @('release', 'create', $tag, $zip, $apk, '--title', "Transcue $ver", '--notes-file', $notesPath)
+    Run gh @('release', 'create', $tag, $setup, $zip, $apk, '--title', "Transcue $ver", '--notes-file', $notesPath)
     Write-Host "== 배포 완료: $tag"
     Write-Host '   macOS universal 앱은 GitHub Actions "Release (macOS)"가 빌드해 이 Release에 붙입니다 (10분 안팎)'
 } finally { Pop-Location }
