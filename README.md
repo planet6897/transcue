@@ -32,6 +32,9 @@
 - **Android**: `transcue-X.Y.Z-android.apk` 설치 (출처를 알 수 없는 앱 허용).
 
 음성 인식·YouTube에는 외부 도구(ffmpeg, whisper.cpp, yt-dlp)가 필요하다 (아래 개발 환경의 설치 명령 참고).
+Windows 설치본은 yt-dlp만 함께 설치하므로 ffmpeg·whisper.cpp는 따로 설치한다.
+
+앱은 켤 때 새 버전을 확인해 알려 준다 (Windows·Android는 앱 안에서 바로 업데이트).
 
 ## 사용법
 

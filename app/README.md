@@ -1,17 +1,16 @@
 # Transcue (Flutter 앱)
 
-AI 동영상 플레이어 Transcue의 Flutter 앱입니다.
+AI 동영상 플레이어 Transcue의 Flutter 앱입니다. 설치·개발 환경은 [저장소 README](../README.md)를 보세요.
 
-## Getting Started
+```bash
+flutter run -d windows   # 또는 -d macos, -d linux, Android 기기
+flutter test
+flutter analyze
+```
 
-This project is a starting point for a Flutter application.
+## 문서
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- [사용 설명서](../docs/guide.md): 화면·단축키·자주 묻는 질문
+- [이중 자막을 만드는 순서](../docs/subtitle-pipeline.md): 자막 찾기·음성 인식·싱크·번역 (`lib/src/pipeline/`)
+- [버전과 배포](../docs/releasing.md): 버전 올리기, 릴리즈 빌드, 플랫폼별 산출물
+- [변경 기록](../CHANGELOG.md)
