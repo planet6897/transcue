@@ -20,7 +20,7 @@ Transcue는 영상을 열면 **원어 자막과 한국어 자막을 함께** 보
 | 기기 | 방법 |
 |---|---|
 | **Mac** | 터미널을 열고 아래 한 줄을 붙여 넣은 뒤 Enter |
-| **Windows** | [Releases](https://github.com/planet6897/transcue/releases)에서 `windows-x64.zip`을 받아 압축을 풀고 `transcue.exe` 실행 |
+| **Windows** | [Releases](https://github.com/planet6897/transcue/releases)에서 `windows-x64-setup.exe`를 받아 실행 (관리자 권한 필요 없음, 시작 메뉴에 등록) |
 | **Linux** | `linux-x64.tar.gz`를 받아 풀고 `transcue` 실행 |
 | **Android·Android TV** | `android.apk`를 받아 설치 |
 
@@ -31,9 +31,12 @@ curl -fsSL https://raw.githubusercontent.com/planet6897/transcue/main/scripts/in
 ```
 
 > **Windows에서 "Windows의 PC 보호" 창이 뜨면** `추가 정보` → `실행`을 누르세요.
+>
+> 설치하지 않고 쓰려면 `windows-x64.zip`을 받아 압축을 풀고 `transcue.exe`를 실행합니다.
+> 지울 때는 Windows **설정 → 앱**에서 Transcue를 제거합니다.
 
 PC에서 자막 만들기(음성 인식)와 YouTube 재생을 쓰려면 ffmpeg, whisper.cpp, yt-dlp가 필요합니다.
-설치 명령은 [README의 개발 환경](../README.md#개발-환경)에 있습니다.
+Windows 설치본은 yt-dlp가 없으면 설치하면서 함께 받습니다. 나머지 설치 명령은 [README의 개발 환경](../README.md#개발-환경)에 있습니다.
 
 ### 새 버전으로 업데이트
 
@@ -41,7 +44,7 @@ PC에서 자막 만들기(음성 인식)와 YouTube 재생을 쓰려면 ffmpeg, 
 
 | 기기 | 업데이트를 누르면 |
 |---|---|
-| **Windows** | 새 버전을 받아 앱을 닫고 바꾼 뒤 다시 실행합니다 (`Program Files`처럼 관리자 권한이 필요한 곳에 풀었다면 배포 페이지를 엽니다) |
+| **Windows** | 새 버전을 받아 앱을 닫고 바꾼 뒤 다시 실행합니다 (zip을 `Program Files`처럼 관리자 권한이 필요한 곳에 풀었다면 배포 페이지를 엽니다) |
 | **Android·Android TV** | 새 버전을 받아 설치 화면을 엽니다. 처음 한 번은 '이 출처 허용'을 켜고 다시 **업데이트**를 누르세요 |
 | **Mac·Linux** | 배포 페이지를 엽니다 (Mac은 위의 설치 명령을 다시 실행) |
 
@@ -134,7 +137,7 @@ PC에서 자막 만들기(음성 인식)와 YouTube 재생을 쓰려면 ffmpeg, 
 
 ### 방법 2. 영어 강연·학습 채널에서 고르기
 
-메뉴의 **영어 강연·학습 채널** 버튼(10)을 누르면 TED·BBC·VOA 영상 목록이 나옵니다.
+메뉴의 **영어 강연·학습 채널** 버튼(13)을 누르면 TED·BBC·VOA 영상 목록이 나옵니다.
 
 ![영어 강연·학습 채널](images/guide/channels.jpg)
 
@@ -145,11 +148,11 @@ PC에서 자막 만들기(음성 인식)와 YouTube 재생을 쓰려면 ffmpeg, 
 
 ### 방법 3. 내 컴퓨터의 동영상 파일
 
-메뉴의 **동영상 열기** 버튼(12)으로 파일을 고르거나, 파일을 Transcue 창 위에 끌어다 놓습니다.
+메뉴의 **동영상 열기** 버튼(15)으로 파일을 고르거나, 파일을 Transcue 창 위에 끌어다 놓습니다.
 
 ### 방법 4. 전에 본 영상 다시 열기
 
-메뉴의 **최근 재생목록** 버튼(11)을 누르면 전에 본 영상이 나옵니다. 보던 곳부터 이어서 재생됩니다.
+메뉴의 **최근 재생목록** 버튼(14)을 누르면 전에 본 영상이 나옵니다. 보던 곳부터 이어서 재생됩니다.
 
 ---
 
@@ -301,4 +304,6 @@ Android 태블릿은 화면 오른쪽·왼쪽을 위아래로 밀어 기기 음�
 설정의 음성 인식 모델에서 `small (빠름)`은 빠르고, `large-v3-turbo (정확)`은 더 정확하지만 느립니다.
 
 **YouTube 영상이 안 열려요.**
-PC에서는 yt-dlp가 설치돼 있어야 합니다. 오래된 yt-dlp는 YouTube가 바뀌면 동작하지 않으니 최신 버전으로 올려 보세요.
+PC에서는 yt-dlp가 설치돼 있어야 합니다 (Windows 설치본은 없으면 함께 설치합니다).
+오래된 yt-dlp는 YouTube가 바뀌면 동작하지 않으니 최신 버전으로 올려 보세요 (명령 프롬프트·터미널에서 `yt-dlp -U`,
+Homebrew로 설치했다면 `brew upgrade yt-dlp`).
